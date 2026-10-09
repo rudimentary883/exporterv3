@@ -1,4 +1,7 @@
 """
+Tabbycat Break Exporter v3.7
+  * v3.7: + /barcodes page: Code 128 check-in barcodes (340 x 50 px, the same as the tab site's JsBarcode ones) from a list of
+          names + six-digit identifiers -> XLSX with the barcode picture INSIDE each cell (for Canva Bulk create) or a ZIP of PNGs
 Tabbycat Break Exporter v3.6
   * v3.6: + optional text after the speaker RANK in the awarding export (suffix_rank: "2ND" -> "2ND BEST EFL SPEAKER")
           + ordinal_case: "upper" (1ST, 2ND, 3RD, 41ST) or "lower" (1st, 2nd, 3rd, 41st) for the break rank and the speaker rank
@@ -43,6 +46,8 @@ import requests
 from collections import Counter
 
 from flask import Flask, render_template, request, send_file, flash, redirect, url_for, jsonify
+
+from barcodes import parse_people, rows_from_text, build_xlsx, build_zip
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "tabbycat-break-exporter-key-2026")
@@ -1088,6 +1093,52 @@ def _clean_params(source):
         "ordinal_case": source.get("ordinal_case"),
         "suffixes": source.get("suffixes"),
     }
+
+
+@app.route("/barcodes")
+def barcodes_page():
+    return render_template("barcodes.html")
+
+
+@app.route("/barcodes/generate", methods=["POST"])
+def barcodes_generate():
+    """name + six-digit identifier list -> XLSX (barcode picture inside each cell) or ZIP of PNG files."""
+    upload = request.files.get("people_file")
+    if upload and upload.filename:
+        text = upload.read().decode("utf-8-sig", errors="replace")
+        first_line = text.splitlines()[0] if text.strip() else ""
+        delimiter = max(("\t", ";", ","), key=first_line.count) if first_line else ","
+        rows = list(csv.reader(io.StringIO(text), delimiter=delimiter))
+    else:
+        rows = rows_from_text(request.form.get("people_text", ""))
+
+    people, problems, warnings = parse_people(rows)
+    if problems or not people:
+        for message in (problems[:8] or ["No people found. Paste or upload a list with a name and a six-digit identifier per line."]):
+            flash(message, "error")
+        if len(problems) > 8:
+            flash(f"... and {len(problems) - 8} more rows with a problem.", "error")
+        return redirect(url_for("barcodes_page"))
+    if len(people) > 3000:
+        flash("Please do at most 3000 people at a time.", "error")
+        return redirect(url_for("barcodes_page"))
+
+    try:
+        scale = min(max(int(request.form.get("scale", "1")), 1), 6)
+    except ValueError:
+        scale = 1
+    quiet = 10 if request.form.get("quiet") == "on" else 0
+
+    if request.form.get("output") == "zip":
+        data, name, mime = build_zip(people, scale, quiet), "barcodes_png.zip", "application/zip"
+    else:
+        data, name = build_xlsx(people, scale, quiet), "barcodes_for_canva.xlsx"
+        mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    response = send_file(io.BytesIO(data), mimetype=mime, as_attachment=True, download_name=name)
+    response.headers["X-Barcode-Count"] = str(len(people))
+    if warnings:
+        response.headers["X-Barcode-Warnings"] = str(len(warnings))
+    return response
 
 
 @app.route("/export", methods=["POST"])
