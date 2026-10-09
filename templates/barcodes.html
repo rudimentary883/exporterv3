@@ -1,0 +1,88 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Check-in Barcodes</title>
+    <style>
+        * { box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; max-width: 900px; margin: 0 auto; padding: 20px; background: #f5f5f5; line-height: 1.6; }
+        h1 { color: #333; margin-bottom: 5px; }
+        .subtitle { color: #666; font-size: 14px; margin-bottom: 25px; }
+        .card { background: white; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .card h2 { margin-top: 0; font-size: 18px; color: #444; border-bottom: 2px solid #e0e0e0; padding-bottom: 10px; }
+        label { display: block; font-weight: 600; margin: 15px 0 5px; color: #444; }
+        textarea, select, input[type="file"] { width: 100%; padding: 10px 12px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
+        textarea { font-family: monospace; min-height: 170px; }
+        .hint { font-size: 12px; color: #888; margin-top: 3px; }
+        .btn { background: #4a90d9; color: white; border: none; padding: 12px 24px; border-radius: 6px; font-size: 15px; cursor: pointer; font-weight: 600; margin-right: 8px; }
+        .btn:hover { background: #357abd; }
+        .btn-success { background: #28a745; }
+        .btn-success:hover { background: #218838; }
+        .flash { padding: 12px 16px; border-radius: 6px; margin-bottom: 10px; background: #f8d7da; color: #721c24; }
+        .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 15px; }
+        .check { display: flex; gap: 8px; align-items: flex-start; font-weight: normal; margin-top: 15px; }
+        code { background: #e9ecef; padding: 1px 5px; border-radius: 3px; }
+        ol { padding-left: 20px; font-size: 14px; }
+        @media (max-width: 600px) { .two-col { grid-template-columns: 1fr; } }
+    </style>
+</head>
+<body>
+    <h1>Check-in Barcodes</h1>
+    <p class="subtitle">Code 128 barcodes, 340 &times; 50 px &mdash; the same ones the tab site draws &mdash; for name tags in Canva</p>
+    <p class="hint"><a href="/">&larr; Back to the break / awards exporter</a></p>
+
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% for category, message in messages %}<div class="flash">{{ message }}</div>{% endfor %}
+    {% endwith %}
+
+    <form action="/barcodes/generate" method="POST" enctype="multipart/form-data">
+        <div class="card">
+            <h2>1. Names and six-digit identifiers</h2>
+            <p class="hint">
+                One person per line: the name and the six-digit identifier printed under the barcode on the tab site's check-in page
+                (Edit Database &rarr; Check-Ins has them as a table you can copy). Paste straight from Google Sheets, or upload a .csv.
+                The first line may be a header such as <code>name, identifier</code>.
+            </p>
+            <label for="people_text">Paste the list</label>
+            <textarea name="people_text" id="people_text" placeholder="Aadi Rohit Sardesai	356452&#10;Aarohi Deepak Bharadwaj	158921"></textarea>
+            <label for="people_file">...or upload a .csv file</label>
+            <input type="file" name="people_file" id="people_file" accept=".csv,.txt">
+        </div>
+
+        <div class="card">
+            <h2>2. Barcode picture</h2>
+            <div class="two-col">
+                <div>
+                    <label for="scale">Size</label>
+                    <select name="scale" id="scale">
+                        <option value="1" selected>340 &times; 50 px (as on the tab site)</option>
+                        <option value="2">680 &times; 100 px (sharper)</option>
+                        <option value="4">1360 &times; 200 px (print quality)</option>
+                    </select>
+                    <p class="hint">Same barcode, more pixels. The shape (6.8 : 1) never changes.</p>
+                </div>
+                <div>
+                    <label class="check" style="margin-top:32px;"><input type="checkbox" name="quiet"><span>Add a 10 px white margin left and right (as on the tab site; picture becomes 360 px wide)</span></label>
+                </div>
+            </div>
+        </div>
+
+        <div class="card" style="text-align:center;">
+            <button type="submit" name="output" value="xlsx" class="btn btn-success">&#128190; XLSX for Canva Bulk create</button>
+            <button type="submit" name="output" value="zip" class="btn">&#128230; ZIP of PNG files</button>
+            <p class="hint">Nothing is stored: the file is made on the spot and sent to you.</p>
+        </div>
+    </form>
+
+    <div class="card">
+        <h2>Using the XLSX in Canva</h2>
+        <ol>
+            <li>Open your name-tag design and add an <strong>image frame</strong> where the barcode goes (340 &times; 50 px, ratio 6.8 : 1).</li>
+            <li>Apps &rarr; <strong>Bulk create</strong> &rarr; upload this XLSX. The barcode column is recognised as images because they sit <em>inside</em> the cells.</li>
+            <li>Right-click the frame &rarr; <strong>Connect data</strong> &rarr; choose the <code>barcode</code> column. Connect the name to your name text box as usual.</li>
+        </ol>
+        <p class="hint">The ZIP holds one <code>&lt;identifier&gt;.png</code> per person plus <code>names.csv</code>, for tools that want separate image files.</p>
+    </div>
+</body>
+</html>
