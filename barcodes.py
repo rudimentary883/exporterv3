@@ -177,7 +177,7 @@ def build_xlsx(people, scale=1, quiet_px=0):
     """XLSX: name | identifier | barcode (the PNG sits inside the cell, as Excel's "Place in Cell")."""
     import xlsxwriter
     buffer = io.BytesIO()
-    workbook = xlsxwriter.Workbook(buffer, {"in_memory": True})
+    workbook = xlsxwriter.Workbook(buffer)          # NOT in_memory: that mode writes an invalid path for in-cell pictures
     sheet = workbook.add_worksheet("Barcodes")
     head = workbook.add_format({"bold": True})
     sheet.write_row(0, 0, ["name", "identifier", "barcode"], head)
