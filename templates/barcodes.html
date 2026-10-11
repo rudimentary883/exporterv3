@@ -29,7 +29,7 @@
 </head>
 <body>
     <h1>Check-in Barcodes</h1>
-    <p class="subtitle">Code 128 barcodes, 340 &times; 50 px &mdash; the same ones the tab site draws &mdash; for name tags in Canva</p>
+    <p class="subtitle">Code 128 barcodes with the number underneath, 340 &times; 100 px &mdash; the same barcode the tab site draws &mdash; for name tags in Canva or Slides</p>
     <p class="hint"><a href="/">&larr; Back to the break / awards exporter</a></p>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
@@ -54,18 +54,42 @@
             <h2>2. Barcode picture</h2>
             <div class="two-col">
                 <div>
-                    <label for="scale">Size</label>
-                    <select name="scale" id="scale">
-                        <option value="1" selected>340 &times; 50 px (as on the tab site)</option>
-                        <option value="2">680 &times; 100 px (sharper)</option>
-                        <option value="4">1360 &times; 200 px (print quality)</option>
+                    <label for="image_format">File type (ZIP)</label>
+                    <select name="image_format" id="image_format">
+                        <option value="png" selected>PNG (picture)</option>
+                        <option value="svg">SVG (vector, any size stays sharp)</option>
                     </select>
-                    <p class="hint">Same barcode, more pixels. The shape (6.8 : 1) never changes.</p>
+                    <p class="hint">SVG applies to the ZIP. Spreadsheets always hold PNG pictures: Excel, Google Sheets and Canva cannot read SVG inside a cell.</p>
                 </div>
                 <div>
-                    <label class="check" style="margin-top:32px;"><input type="checkbox" name="quiet"><span>Add a 10 px white margin left and right (as on the tab site; picture becomes 360 px wide)</span></label>
+                    <label for="scale">Size</label>
+                    <select name="scale" id="scale">
+                        <option value="1" selected>340 &times; 100 px (as designed)</option>
+                        <option value="2">680 &times; 200 px (sharper)</option>
+                        <option value="3">1020 &times; 300 px (print)</option>
+                        <option value="4">1360 &times; 400 px (print, large file)</option>
+                    </select>
+                    <p class="hint">Same barcode, more pixels (PNG). The shape never changes.</p>
                 </div>
             </div>
+            <div class="two-col">
+                <div>
+                    <label for="label">Number under the barcode</label>
+                    <select name="label" id="label">
+                        <option value="on" selected>Show it (bars 340 &times; 75 + number = 340 &times; 100 px)</option>
+                        <option value="off">Hide it (bars only, 340 &times; 75 px)</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="check" style="margin-top:32px;"><input type="checkbox" name="quiet"><span>Add a 10 px white margin left and right (as on the tab site; 360 px wide)</span></label>
+                </div>
+            </div>
+            <label for="sheet_style">Spreadsheet (XLSX) style</label>
+            <select name="sheet_style" id="sheet_style">
+                <option value="anchored" selected>Picture sitting inside the cell (works in Excel, Google Sheets; try this first for Canva)</option>
+                <option value="incell">Excel 365 "Place in cell" picture (shows #VALUE! in other programs)</option>
+            </select>
+            <p class="hint">Both put the barcode in the <code>barcode</code> column of its row. If Canva does not see the pictures in one style, try the other.</p>
         </div>
 
         <div class="card" style="text-align:center;">
@@ -78,11 +102,15 @@
     <div class="card">
         <h2>Using the XLSX in Canva</h2>
         <ol>
-            <li>Open your name-tag design and add an <strong>image frame</strong> where the barcode goes (340 &times; 50 px, ratio 6.8 : 1).</li>
-            <li>Apps &rarr; <strong>Bulk create</strong> &rarr; upload this XLSX. The barcode column is recognised as images because they sit <em>inside</em> the cells.</li>
+            <li>Open your name-tag design and add an <strong>image frame</strong> where the barcode goes (340 &times; 100 px, ratio 3.4 : 1).</li>
+            <li>Apps &rarr; <strong>Bulk create</strong> &rarr; upload this XLSX.</li>
             <li>Right-click the frame &rarr; <strong>Connect data</strong> &rarr; choose the <code>barcode</code> column. Connect the name to your name text box as usual.</li>
         </ol>
-        <p class="hint">The ZIP holds one <code>&lt;identifier&gt;.png</code> per person plus <code>names.csv</code>, for tools that want separate image files.</p>
+        <p class="hint">
+            If the barcode column is not offered as images: download the XLSX in the <em>other</em> style, or build the column in Google Sheets with the
+            <code>fillBarcodeColumn()</code> function of the Apps Script (File &rarr; Download &rarr; .xlsx), which is the route Canva's help describes for Google Sheets.
+            The ZIP holds one <code>&lt;identifier&gt;.png</code> (or .svg) per person plus <code>names.csv</code>.
+        </p>
     </div>
 </body>
 </html>
