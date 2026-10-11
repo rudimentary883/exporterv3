@@ -1,4 +1,7 @@
 """
+Tabbycat Break Exporter v3.8
+  * v3.8: barcodes are 340 x 100 px (bars 75 px + the identifier written underneath); PNG or SVG files in the ZIP; the XLSX can hold the
+          picture "anchored" inside the cell (default) or as an Excel 365 in-cell picture
 Tabbycat Break Exporter v3.7
   * v3.7: + /barcodes page: Code 128 check-in barcodes (340 x 50 px, the same as the tab site's JsBarcode ones) from a list of
           names + six-digit identifiers -> XLSX with the barcode picture INSIDE each cell (for Canva Bulk create) or a ZIP of PNGs
@@ -1128,14 +1131,22 @@ def barcodes_generate():
     except ValueError:
         scale = 1
     quiet = 10 if request.form.get("quiet") == "on" else 0
+    label = request.form.get("label", "on") != "off"                      # the number under the bars (default: shown)
+    image_format = "svg" if request.form.get("image_format") == "svg" else "png"
 
+    note = ""
     if request.form.get("output") == "zip":
-        data, name, mime = build_zip(people, scale, quiet), "barcodes_png.zip", "application/zip"
+        data, name, mime = build_zip(people, image_format, scale, quiet, label), f"barcodes_{image_format}.zip", "application/zip"
     else:
-        data, name = build_xlsx(people, scale, quiet), "barcodes_for_canva.xlsx"
+        style = "incell" if request.form.get("sheet_style") == "incell" else "anchored"
+        data, name = build_xlsx(people, scale, quiet, style, label), "barcodes_for_canva.xlsx"
         mime = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        if image_format == "svg":
+            note = "Spreadsheets can only hold PNG pictures; the XLSX contains PNG."
     response = send_file(io.BytesIO(data), mimetype=mime, as_attachment=True, download_name=name)
     response.headers["X-Barcode-Count"] = str(len(people))
+    if note:
+        response.headers["X-Barcode-Note"] = note
     if warnings:
         response.headers["X-Barcode-Warnings"] = str(len(warnings))
     return response
