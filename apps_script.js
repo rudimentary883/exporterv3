@@ -3,7 +3,7 @@
  *
  * THE BARCODE: the same as the one the tab site draws with JsBarcode (format CODE128): a 6-digit number becomes Code 128 subset C =
  * start + 3 symbols + checksum + stop = 68 modules x 5 px = 340 px wide. Bars are 75 px high and the identifier is written under
- * them (monospace 20 px), so the picture is 340 x 100 px (= 255 x 75 pt on a slide). It is generated here, in the script - no
+ * them (20 px, 11 px pitch like the tab site's label), so the picture is 340 x 100 px (= 255 x 75 pt on a slide). It is generated here, in the script - no
  * internet, no add-on - as a PNG and inserted into the slide.
  *
  * WHY PNG AND NOT SVG: Google Slides (insertImage) only accepts PNG, JPEG or GIF; an SVG cannot be inserted. A PNG is a picture of
@@ -191,13 +191,17 @@ var MODULE_PX_ = 5;        // jsbarcode-width="5"
 var BAR_HEIGHT_PX_ = 75;   // bars (the tab site uses 50)
 var LABEL_HEIGHT_PX_ = 25; // the number under the bars
 var LABEL_FONT_PX_ = 20;   // monospace 20 px
-var LABEL_BASELINE_PX_ = 95;
+var LABEL_BASELINE_PX_ = 97; // = bar height + 2 + 20, the way JsBarcode places it
+var LABEL_INK_GAIN_ = 1.4;   // a little heavier digits, like the tab site's (Windows) text rendering; 1 = plain
+var LABEL_ADVANCE_PX_ = 11;  // digit to digit, measured on the tab site (Windows monospace = Consolas)
 
 // ----- digit outlines: SVG-like paths in 1/512 em, y down, origin = left of the glyph on the baseline (DejaVu Sans Mono) -----
 var GLYPH_EM_ = 512;
 var GLYPH_ADVANCE_ = 308;
+// the outlines are DejaVu Sans Mono (12.04 px pitch at 20 px), squeezed to the 11 px pitch of the tab site label
+var LABEL_X_SCALE_ = LABEL_ADVANCE_PX_ / (GLYPH_ADVANCE_ * LABEL_FONT_PX_ / GLYPH_EM_);
 var GLYPHS_ = {
-  '0': 'M121 -188Q121 -201 130 -211Q140 -221 154 -221Q168 -221 178 -211Q188 -201 188 -188Q188 -174 178 -164Q168 -154 154 -154Q140 -154 130 -164Q121 -173 121 -188ZM154 -340Q119 -340 101 -302Q84 -264 84 -186Q84 -109 101 -71Q119 -33 154 -33Q190 -33 207 -71Q224 -109 224 -186Q224 -264 207 -302Q190 -340 154 -340ZM154 -380Q214 -380 244 -331Q275 -282 275 -186Q275 -91 244 -42Q214 7 154 7Q94 7 64 -42Q33 -91 33 -186Q33 -282 64 -331Q94 -380 154 -380Z',
+  '0': 'M154 -380Q214 -380 244 -331Q275 -282 275 -186Q275 -91 244 -42Q214 7 154 7Q94 7 64 -42Q33 -91 33 -186Q33 -282 64 -331Q94 -380 154 -380ZM154 -340Q119 -340 101 -302Q84 -264 84 -186Q84 -109 101 -71Q119 -33 154 -33Q190 -33 207 -71Q224 -109 224 -186Q224 -264 207 -302Q190 -340 154 -340ZM57 -142L251 -289L251 -231L57 -84Z',
   '1': 'M68 -42L146 -42L146 -328L62 -309L62 -355L146 -373L196 -373L196 -42L274 -42L274 0L68 0Z',
   '2': 'M93 -42L265 -42L265 0L38 0L38 -42Q85 -92 120 -130Q155 -167 168 -183Q193 -213 202 -232Q210 -251 210 -271Q210 -302 192 -320Q174 -338 142 -338Q119 -338 94 -329Q69 -321 41 -304L41 -355Q67 -368 92 -374Q116 -380 141 -380Q196 -380 229 -351Q262 -322 262 -274Q262 -250 251 -226Q240 -202 215 -174Q201 -157 174 -128Q148 -100 93 -42Z',
   '3': 'M194 -200Q231 -190 250 -165Q270 -140 270 -103Q270 -52 235 -22Q200 7 139 7Q114 7 87 2Q60 -2 34 -11L34 -62Q60 -48 84 -42Q109 -35 134 -35Q175 -35 198 -54Q220 -73 220 -108Q220 -140 198 -160Q175 -179 137 -179L99 -179L99 -220L137 -220Q172 -220 192 -236Q211 -251 211 -278Q211 -307 193 -322Q175 -338 141 -338Q119 -338 95 -332Q72 -328 46 -318L46 -364Q76 -372 99 -376Q123 -380 141 -380Q196 -380 228 -353Q261 -325 261 -280Q261 -249 244 -229Q227 -208 194 -200Z',
@@ -247,19 +251,20 @@ function code128c_(digits) {
 /** The label (all digits) as polygons in picture pixels, centred. */
 function labelPolygons_(text, scale, width) {
   var unit = LABEL_FONT_PX_ * scale / GLYPH_EM_;
-  var left = (width - text.length * GLYPH_ADVANCE_ * unit) / 2;
+  var ux = unit * LABEL_X_SCALE_;
+  var left = (width - text.length * GLYPH_ADVANCE_ * ux) / 2;
   var base = LABEL_BASELINE_PX_ * scale;
   var polys = [];
   for (var i = 0; i < text.length; i++) {
-    var ox = left + i * GLYPH_ADVANCE_ * unit;
+    var ox = left + i * GLYPH_ADVANCE_ * ux;
     glyphContours_(text.charAt(i)).forEach(function (contour) {
-      polys.push(contour.map(function (p) { return [ox + p[0] * unit, base + p[1] * unit]; }));
+      polys.push(contour.map(function (p) { return [ox + p[0] * ux, base + p[1] * unit]; }));
     });
   }
   return polys;
 }
 
-/** Anti-aliased coverage 0..1 (even-odd) for pixel rows yTop..yBottom-1: array of rows. */
+/** Anti-aliased coverage 0..1 (non-zero winding) for pixel rows yTop..yBottom-1: array of rows. */
 function labelCoverage_(polys, width, yTop, yBottom) {
   var SUB = 4, edges = [];
   polys.forEach(function (poly) {
@@ -267,8 +272,9 @@ function labelCoverage_(polys, width, yTop, yBottom) {
       var a = poly[k], b = poly[(k + 1) % poly.length];
       var x1 = a[0], y1 = a[1], x2 = b[0], y2 = b[1];
       if (y1 !== y2) {
-        if (y1 > y2) { var tx = x1, ty = y1; x1 = x2; y1 = y2; x2 = tx; y2 = ty; }
-        edges.push([y1, y2, x1, (x2 - x1) / (y2 - y1)]);
+        var dir = 1;
+        if (y1 > y2) { var tx = x1, ty = y1; x1 = x2; y1 = y2; x2 = tx; y2 = ty; dir = -1; }
+        edges.push([y1, y2, x1, (x2 - x1) / (y2 - y1), dir]);
       }
     }
   });
@@ -278,15 +284,22 @@ function labelCoverage_(polys, width, yTop, yBottom) {
     for (var c = 0; c < width; c++) cov.push(0);
     for (var sub = 0; sub < SUB; sub++) {
       var ys = row + (sub + 0.5) / SUB;
-      var xs = [];
-      for (var e = 0; e < edges.length; e++) if (edges[e][0] <= ys && ys < edges[e][1]) xs.push(edges[e][2] + (ys - edges[e][0]) * edges[e][3]);
-      xs.sort(function (p, q) { return p - q; });
-      for (var j = 0; j + 1 < xs.length; j += 2) {
-        var xa = xs[j], xb = xs[j + 1], px = Math.floor(xa);
-        while (px < xb && px < width) {
-          if (px >= 0) cov[px] += (Math.min(px + 1, xb) - Math.max(px, xa)) / SUB;
-          px++;
+      var crossings = [];
+      for (var e = 0; e < edges.length; e++) if (edges[e][0] <= ys && ys < edges[e][1]) crossings.push([edges[e][2] + (ys - edges[e][0]) * edges[e][3], edges[e][4]]);
+      crossings.sort(function (p, q) { return (p[0] - q[0]) || (p[1] - q[1]); });
+      var winding = 0, xa = 0;                              // non-zero fill, the rule fonts are designed for
+      for (var j = 0; j < crossings.length; j++) {
+        var newWinding = winding + crossings[j][1];
+        if (winding === 0 && newWinding !== 0) {
+          xa = crossings[j][0];
+        } else if (winding !== 0 && newWinding === 0) {
+          var xb = crossings[j][0], px = Math.floor(xa);
+          while (px < xb && px < width) {
+            if (px >= 0) cov[px] += (Math.min(px + 1, xb) - Math.max(px, xa)) / SUB;
+            px++;
+          }
         }
+        winding = newWinding;
       }
     }
     rows.push(cov);
@@ -323,7 +336,7 @@ function barcodePng_(digits, scale, quietPx, label) {
   if (label) {
     var cover = labelCoverage_(labelPolygons_(String(digits), scale, width), width, barH, height);
     cover.forEach(function (cov) {
-      Array.prototype.push.apply(raw, pack(cov.map(function (c) { return 3 - Math.min(3, Math.floor(c * 3 + 0.5)); })));
+      Array.prototype.push.apply(raw, pack(cov.map(function (c) { return 3 - Math.min(3, Math.floor(Math.min(1, c * LABEL_INK_GAIN_) * 3 + 0.5)); })));
     });
   }
 
