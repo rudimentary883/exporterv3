@@ -60,6 +60,11 @@
                         <option value="svg">SVG (vector, any size stays sharp)</option>
                     </select>
                     <p class="hint">SVG applies to the ZIP. Spreadsheets always hold PNG pictures: Excel, Google Sheets and Canva cannot read SVG inside a cell.</p>
+                    <label for="svg_label">Number in the SVG</label>
+                    <select name="svg_label" id="svg_label">
+                        <option value="outline" selected>Drawn as shapes (identical everywhere)</option>
+                        <option value="text">Text in <code>monospace</code> 20 px (like the tab site; uses the viewer's font)</option>
+                    </select>
                 </div>
                 <div>
                     <label for="scale">Size</label>
