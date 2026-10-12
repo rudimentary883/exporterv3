@@ -1136,7 +1136,7 @@ def barcodes_generate():
 
     note = ""
     if request.form.get("output") == "zip":
-        data, name, mime = build_zip(people, image_format, scale, quiet, label), f"barcodes_{image_format}.zip", "application/zip"
+        data, name, mime = build_zip(people, image_format, scale, quiet, label, "text" if request.form.get("svg_label") == "text" else "outline"), f"barcodes_{image_format}.zip", "application/zip"
     else:
         style = "incell" if request.form.get("sheet_style") == "incell" else "anchored"
         data, name = build_xlsx(people, scale, quiet, style, label), "barcodes_for_canva.xlsx"
