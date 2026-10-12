@@ -5,7 +5,7 @@ The tab site draws them with JsBarcode v3.11.5 (MIT), format "auto" = CODE128:
     <svg class="barcode-placeholder" jsbarcode-value="356452" jsbarcode-width="5" jsbarcode-height="50">
 A six-digit number is always Code 128 subset C (two digits per symbol):
     start C + 3 symbols + checksum + stop = 68 modules x 5 px = 340 px wide.
-Here the bars are 75 px high and the number is written under them (monospace, 20 px): the picture is 340 x 100 px.
+Here the bars are 75 px high and the number is written under them (20 px, 11 px pitch like the tab site's Consolas): the picture is 340 x 100 px.
 The symbol table is the one in JsBarcode's source (checked against the ISO/IEC 15417 table).
 The digits are vector outlines of DejaVu Sans Mono (free licence, Bitstream Vera / DejaVu), so the PNG, the SVG and the Apps Script
 all draw exactly the same label, at any size.
@@ -29,7 +29,9 @@ MODULE_PX = 5            # jsbarcode-width="5"
 BAR_HEIGHT_PX = 75       # bars (the tab site uses 50)
 LABEL_HEIGHT_PX = 25     # the number under the bars
 LABEL_FONT_PX = 20       # monospace 20 px, like JsBarcode's label
-LABEL_BASELINE_PX = 95   # baseline of the digits (5 px above the bottom edge)
+LABEL_BASELINE_PX = 97   # baseline of the digits = bar height + 2 + 20, the way JsBarcode places it (tab site: 50 + 2 + 20 = 72)
+LABEL_INK_GAIN = 1.4     # makes the digits a little heavier, like the tab site's (Windows) text rendering; 1.0 = plain
+LABEL_ADVANCE_PX = 11.0  # distance from digit to digit: measured on the tab site (Windows "monospace" = Consolas, 0.55 em)
 ID_LENGTH = 6
 
 BARS = [
@@ -67,8 +69,10 @@ START_C = 105
 # ---- digit outlines: SVG-like paths in 1/512 em, y down, origin = left of the glyph on the baseline -----------------------
 GLYPH_EM = 512
 GLYPH_ADVANCE = 308
+# the outlines are DejaVu Sans Mono (advance 12.04 px at 20 px); squeezed to the 11 px pitch of the tab site's Consolas label
+LABEL_X_SCALE = LABEL_ADVANCE_PX / (GLYPH_ADVANCE * LABEL_FONT_PX / GLYPH_EM)
 GLYPHS = {
-    "0": "M121 -188Q121 -201 130 -211Q140 -221 154 -221Q168 -221 178 -211Q188 -201 188 -188Q188 -174 178 -164Q168 -154 154 -154Q140 -154 130 -164Q121 -173 121 -188ZM154 -340Q119 -340 101 -302Q84 -264 84 -186Q84 -109 101 -71Q119 -33 154 -33Q190 -33 207 -71Q224 -109 224 -186Q224 -264 207 -302Q190 -340 154 -340ZM154 -380Q214 -380 244 -331Q275 -282 275 -186Q275 -91 244 -42Q214 7 154 7Q94 7 64 -42Q33 -91 33 -186Q33 -282 64 -331Q94 -380 154 -380Z",
+    "0": "M154 -380Q214 -380 244 -331Q275 -282 275 -186Q275 -91 244 -42Q214 7 154 7Q94 7 64 -42Q33 -91 33 -186Q33 -282 64 -331Q94 -380 154 -380ZM154 -340Q119 -340 101 -302Q84 -264 84 -186Q84 -109 101 -71Q119 -33 154 -33Q190 -33 207 -71Q224 -109 224 -186Q224 -264 207 -302Q190 -340 154 -340ZM57 -142L251 -289L251 -231L57 -84Z",
     "1": "M68 -42L146 -42L146 -328L62 -309L62 -355L146 -373L196 -373L196 -42L274 -42L274 0L68 0Z",
     "2": "M93 -42L265 -42L265 0L38 0L38 -42Q85 -92 120 -130Q155 -167 168 -183Q193 -213 202 -232Q210 -251 210 -271Q210 -302 192 -320Q174 -338 142 -338Q119 -338 94 -329Q69 -321 41 -304L41 -355Q67 -368 92 -374Q116 -380 141 -380Q196 -380 229 -351Q262 -322 262 -274Q262 -250 251 -226Q240 -202 215 -174Q201 -157 174 -128Q148 -100 93 -42Z",
     "3": "M194 -200Q231 -190 250 -165Q270 -140 270 -103Q270 -52 235 -22Q200 7 139 7Q114 7 87 2Q60 -2 34 -11L34 -62Q60 -48 84 -42Q109 -35 134 -35Q175 -35 198 -54Q220 -73 220 -108Q220 -140 198 -160Q175 -179 137 -179L99 -179L99 -220L137 -220Q172 -220 192 -236Q211 -251 211 -278Q211 -307 193 -322Q175 -338 141 -338Q119 -338 95 -332Q72 -328 46 -318L46 -364Q76 -372 99 -376Q123 -380 141 -380Q196 -380 228 -353Q261 -325 261 -280Q261 -249 244 -229Q227 -208 194 -200Z",
@@ -137,14 +141,15 @@ def _layout(identifier, scale, quiet_px, label):
 def _label_polygons(text, scale, width):
     """The label as a list of polygons in picture pixels (all digits), centred on the picture."""
     unit = LABEL_FONT_PX * scale / GLYPH_EM
-    total = len(text) * GLYPH_ADVANCE * unit
+    ux = unit * LABEL_X_SCALE
+    total = len(text) * GLYPH_ADVANCE * ux
     left = (width - total) / 2.0
     base = LABEL_BASELINE_PX * scale
     polygons = []
     for i, ch in enumerate(text):
-        ox = left + i * GLYPH_ADVANCE * unit
+        ox = left + i * GLYPH_ADVANCE * ux
         for contour in _glyph_contours(ch):
-            polygons.append([(ox + x * unit, base + y * unit) for x, y in contour])
+            polygons.append([(ox + x * ux, base + y * unit) for x, y in contour])
     return polygons
 
 
@@ -152,29 +157,37 @@ _SUB_ROWS = 4
 
 
 def _label_coverage(polygons, width, y_top, y_bottom):
-    """Anti-aliased coverage 0..1 of the polygons (even-odd) for the pixel rows y_top..y_bottom-1: list of float rows."""
+    """Anti-aliased coverage 0..1 of the polygons (non-zero winding) for the pixel rows y_top..y_bottom-1: list of float rows."""
     edges = []
     for poly in polygons:
         n = len(poly)
         for k in range(n):
             (x1, y1), (x2, y2) = poly[k], poly[(k + 1) % n]
             if y1 != y2:
+                direction = 1
                 if y1 > y2:
                     x1, y1, x2, y2 = x2, y2, x1, y1
-                edges.append((y1, y2, x1, (x2 - x1) / (y2 - y1)))
+                    direction = -1
+                edges.append((y1, y2, x1, (x2 - x1) / (y2 - y1), direction))
     rows = []
     for row in range(y_top, y_bottom):
         cov = [0.0] * width
         for sub in range(_SUB_ROWS):
             ys = row + (sub + 0.5) / _SUB_ROWS
-            xs = sorted(x1 + (ys - y1) * slope for (y1, y2, x1, slope) in edges if y1 <= ys < y2)
-            for j in range(0, len(xs) - 1, 2):
-                xa, xb = xs[j], xs[j + 1]
-                px = int(xa // 1)
-                while px < xb and px < width:
-                    if px >= 0:
-                        cov[px] += (min(px + 1, xb) - max(px, xa)) / _SUB_ROWS
-                    px += 1
+            crossings = sorted((x1 + (ys - y1) * slope, d) for (y1, y2, x1, slope, d) in edges if y1 <= ys < y2)
+            winding, xa = 0, 0.0
+            for x, d in crossings:                                     # non-zero fill, the rule fonts are designed for
+                new_winding = winding + d
+                if winding == 0 and new_winding != 0:
+                    xa = x
+                elif winding != 0 and new_winding == 0:
+                    xb = x
+                    px = int(xa // 1)
+                    while px < xb and px < width:
+                        if px >= 0:
+                            cov[px] += (min(px + 1, xb) - max(px, xa)) / _SUB_ROWS
+                        px += 1
+                winding = new_winding
         rows.append(cov)
     return rows
 
@@ -212,7 +225,7 @@ def barcode_png(identifier, scale=1, quiet_px=0, label=True):
     if label:
         coverage = _label_coverage(_label_polygons(str(identifier), scale, width), width, bar_h, height)
         for cov in coverage:
-            raw.append(b"\x00" + pack([3 - min(3, int(c * 3 + 0.5)) for c in cov]))
+            raw.append(b"\x00" + pack([3 - min(3, int(min(1.0, c * LABEL_INK_GAIN) * 3 + 0.5)) for c in cov]))
     ihdr = struct.pack(">IIBBBBB", width, height, 2, 0, 0, 0, 0)   # 2-bit greyscale
     return (b"\x89PNG\r\n\x1a\n" + _chunk(b"IHDR", ihdr) + _chunk(b"IDAT", zlib.compress(b"".join(raw), 9)) + _chunk(b"IEND", b""))
 
@@ -225,21 +238,25 @@ def _num(v):
 def _label_svg_path(text, width):
     """The label as one SVG path (true quadratic curves from the font), centred, in viewBox pixels."""
     unit = LABEL_FONT_PX / GLYPH_EM
-    left = (width - len(text) * GLYPH_ADVANCE * unit) / 2.0
+    ux = unit * LABEL_X_SCALE
+    left = (width - len(text) * GLYPH_ADVANCE * ux) / 2.0
     d = []
     for i, ch in enumerate(text):
-        ox = left + i * GLYPH_ADVANCE * unit
+        ox = left + i * GLYPH_ADVANCE * ux
         for cmd, args in _PATH_TOKEN.findall(GLYPHS[ch]):
             nums = [float(n) for n in re.findall(r"-?\d+", args)]
-            pts = [f"{_num(ox + nums[k] * unit)} {_num(LABEL_BASELINE_PX + nums[k + 1] * unit)}" for k in range(0, len(nums), 2)]
+            pts = [f"{_num(ox + nums[k] * ux)} {_num(LABEL_BASELINE_PX + nums[k + 1] * unit)}" for k in range(0, len(nums), 2)]
             d.append(cmd + " ".join(pts))
     return "".join(d)
 
 
-def barcode_svg(identifier, scale=1, quiet_px=0, label=True):
+def barcode_svg(identifier, scale=1, quiet_px=0, label=True, label_style="outline"):
     """
     SVG (bytes): white background, the bars and the digits as filled paths (no font needed).
     viewBox is 340 x 100 (360 x 100 with the margin); width / height are multiplied by `scale` - it is a vector, so any size is sharp.
+    label_style "outline": the digits are paths (look identical everywhere, no font needed)
+    label_style "text"   : the digits are a <text style="font: 20px monospace"> element, exactly like the tab site's own SVG
+                           (drawn in the viewer's own monospace font; if the program has no such font it substitutes another one)
     """
     bits, _, quiet, px_module, width, bar_h, height = _layout(identifier, 1, quiet_px, label)
     scale = max(int(scale), 1)
@@ -256,14 +273,18 @@ def barcode_svg(identifier, scale=1, quiet_px=0, label=True):
     svg = [f'<svg xmlns="http://www.w3.org/2000/svg" version="1.1" width="{width * scale}" height="{height * scale}" viewBox="0 0 {width} {height}">',
            f'<rect width="{width}" height="{height}" fill="#ffffff"/>',
            f'<path d="{"".join(bars)}" fill="#000000" shape-rendering="crispEdges"/>']
-    if label:
-        svg.append(f'<path d="{_label_svg_path(str(identifier), width)}" fill="#000000" fill-rule="evenodd"/>')
+    if label and label_style == "text":
+        svg.append(f'<text style="font: {LABEL_FONT_PX}px monospace" text-anchor="middle" x="{_num(width / 2.0)}" y="{LABEL_BASELINE_PX}">{identifier}</text>')
+    elif label:
+        svg.append(f'<path d="{_label_svg_path(str(identifier), width)}" fill="#000000" fill-rule="nonzero" stroke="#000000" stroke-width="0.3" stroke-linejoin="round"/>')
     svg.append("</svg>")
     return "".join(svg).encode("utf-8")
 
 
-def barcode_image(identifier, image_format="png", scale=1, quiet_px=0, label=True):
-    return (barcode_svg if image_format == "svg" else barcode_png)(identifier, scale, quiet_px, label)
+def barcode_image(identifier, image_format="png", scale=1, quiet_px=0, label=True, label_style="outline"):
+    if image_format == "svg":
+        return barcode_svg(identifier, scale, quiet_px, label, label_style)
+    return barcode_png(identifier, scale, quiet_px, label)
 
 
 # ----------------------------------------------------------------------------------------------------------------
@@ -379,7 +400,7 @@ def build_xlsx(people, scale=1, quiet_px=0, style="anchored", label=True):
     return buffer.getvalue()
 
 
-def build_zip(people, image_format="png", scale=1, quiet_px=0, label=True):
+def build_zip(people, image_format="png", scale=1, quiet_px=0, label=True, label_style="outline"):
     ext = "svg" if image_format == "svg" else "png"
     buffer = io.BytesIO()
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
@@ -387,7 +408,7 @@ def build_zip(people, image_format="png", scale=1, quiet_px=0, label=True):
         writer = csv.writer(listing)
         writer.writerow(["name", "identifier", "file"])
         for name, ident in people:
-            archive.writestr(f"{ident}.{ext}", barcode_image(ident, ext, scale, quiet_px, label))
+            archive.writestr(f"{ident}.{ext}", barcode_image(ident, ext, scale, quiet_px, label, label_style))
             writer.writerow([name, ident, f"{ident}.{ext}"])
         archive.writestr("names.csv", listing.getvalue())
     return buffer.getvalue()
