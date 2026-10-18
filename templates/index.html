@@ -169,7 +169,7 @@
                 <div id="break_fields">
                     <label for="category_slug">Break Category Slug</label>
                     <input type="text" name="category_slug" id="category_slug" placeholder="open" value="open" required>
-                    <p class="hint">e.g., <code>open</code>, <code>unioncup</code>, <code>esl</code>, <code>novice</code></p>
+                    <p class="hint">e.g., <code>open</code>, <code>unioncup</code>, <code>esl</code>, <code>novice</code>. <strong>Several categories in one file:</strong> <code>open, esl, novice</code> (a last <code>category</code> column is added; <code>{category}</code> in the break text is replaced by each category's name).</p>
                 </div>
                 <div id="award_fields" style="display:none;">
                     <label for="award_tab">Speaker Tab</label>
@@ -299,7 +299,7 @@
 
     <script>
         const COLUMNS = {
-            bp:   'break, team, code_name, speakers (A & B), points, total_speaker_score, number_of_1sts, number_of_2nds, draw_strength_by_wins, remark (ties)',
+            bp:   'break, team, code_name, speakers (A & B), points, total_speaker_score, number_of_1sts, number_of_2nds, draw_strength_by_wins, remark (ties) [+ category when several categories]',
             '3v3': 'break, team, code_name, speakers (A, B, C), wins, total_speaker_score',
             wsdc: 'break, team, code_name, speakers (A, B, C, ...), wins, average_total_speaker_score'
         };
