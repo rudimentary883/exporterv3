@@ -1,4 +1,12 @@
 """
+Tabbycat Break Exporter v3.9
+  * v3.9: team names come from long_name first (short_name cut long names off); option team_name = long | short | reference
+          + BP break export: new last column "remark" for teams tied on points AND total speaker score:
+            "Tie broken by number of firsts" / "Tie broken by draw strength by wins"
+          + awards: several speaker tabs in ONE file (award_tab = "open, novice, schools"), award_order = tab | reverse | both
+            (both = ZIP with the speaker-tab order and the reversed 10th -> 1st order), ties read "Joint 7th" or "co-7th"
+            (tie_style = joint | co | none), "{category}" in the rank text, optional plain "Best X Speaker" for 1st
+  * + page /judge-rounds (moved here from the importer): judges who judged at least N preliminary rounds -> .csv
 Tabbycat Break Exporter v3.8
   * v3.8: barcodes are 340 x 100 px (bars 75 px + the identifier written underneath); PNG or SVG files in the ZIP; the XLSX can hold the
           picture "anchored" inside the cell (default) or as an Excel 365 in-cell picture
@@ -45,6 +53,7 @@ import csv
 import time
 import re
 import bisect
+import zipfile
 import requests
 from collections import Counter
 
@@ -65,7 +74,7 @@ FORMAT_CONFIG = {
         "separator": " & ",
         "expected_speakers": (2, 2),
         "headers": ["break", "team", "code_name", "speakers", "points", "total_speaker_score",
-                    "number_of_1sts", "number_of_2nds", "draw_strength_by_wins"],
+                    "number_of_1sts", "number_of_2nds", "draw_strength_by_wins", "remark"],
     },
     "3v3": {           # AP / Australs / UADC: ranked by wins, then total speaker score
         "label": "3v3 (AP / Australs / UADC)",
@@ -81,7 +90,7 @@ FORMAT_CONFIG = {
     },
 }
 # Columns that are never filled on an "intro" row (it only carries the break rank and the numbers)
-INTRO_BLANK_COLUMNS = {"team", "code_name", "speakers"}
+INTRO_BLANK_COLUMNS = {"team", "code_name", "speakers", "remark"}
 ATSS_DECIMALS = 2
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -222,6 +231,112 @@ def apply_suffixes(headers, values, suffixes, is_breaking=True):
             text = None
         result.append(with_suffix(value, text))
     return result
+
+
+TEAM_NAME_ORDER = {
+    "long": ("long_name", "short_name", "reference", "code_name"),
+    "short": ("short_name", "long_name", "reference", "code_name"),
+    "reference": ("reference", "long_name", "short_name", "code_name"),
+}
+TIE_FIRSTS_REMARK = "Tie broken by number of firsts"
+TIE_DRAW_REMARK = "Tie broken by draw strength by wins"
+TIE_OPEN_REMARK = "Tie not broken (equal on every metric)"
+
+
+def clean_team_name_source(value):
+    text = str(value or "").strip().lower()
+    return text if text in TEAM_NAME_ORDER else "long"
+
+
+def pick_team_name(team_obj, source="long"):
+    """Full team name: long_name first (short_name is cut off for long names). source: long | short | reference."""
+    for key in TEAM_NAME_ORDER[clean_team_name_source(source)]:
+        if team_obj.get(key):
+            return team_obj.get(key)
+    return ""
+
+
+def bp_tie_remarks(values_by_team):
+    """
+    values_by_team: team id -> BP metric texts (points, total_speaker_score, number_of_1sts, draw_strength_by_wins).
+    Teams with the same points AND total speaker score are tied. A team whose number of 1sts is unique inside its tie
+    was separated by the firsts; teams that share their firsts were separated by the draw strength by wins.
+    -> {team id: remark}
+    """
+    groups = {}
+    for tid, v in values_by_team.items():
+        if v.get("points") not in (None, "") and v.get("total_speaker_score") not in (None, ""):
+            groups.setdefault((v["points"], v["total_speaker_score"]), []).append(tid)
+    remarks = {}
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        firsts = Counter(values_by_team[t].get("number_of_1sts", "") for t in members)
+        for tid in members:
+            f = values_by_team[tid].get("number_of_1sts", "")
+            if f == "":
+                continue
+            if firsts[f] == 1:
+                remarks[tid] = TIE_FIRSTS_REMARK
+                continue
+            same = [t for t in members if values_by_team[t].get("number_of_1sts", "") == f]
+            draw = Counter(values_by_team[t].get("draw_strength_by_wins", "") for t in same)
+            d = values_by_team[tid].get("draw_strength_by_wins", "")
+            if d == "":
+                continue
+            remarks[tid] = TIE_DRAW_REMARK if draw[d] == 1 else TIE_OPEN_REMARK
+    return remarks
+
+
+def clean_tie_style(value):
+    text = str(value or "").strip().lower()
+    if text in ("co", "co-", "co_"):
+        return "co"
+    if text in ("none", "off", "no", "false", "0", "equals", "="):
+        return "none"
+    return "joint"
+
+
+def tie_prefix(tie_style, ordinal_case="upper"):
+    lower = clean_ordinal_case(ordinal_case) == "lower"
+    if tie_style == "joint":
+        return "Joint " if lower else "JOINT "
+    if tie_style == "co":
+        return "co-" if lower else "CO-"
+    return ""
+
+
+def award_rank_label(rank, tied, ordinal_case="upper", tie_style="joint"):
+    """7 + tied -> 'JOINT 7TH' / 'co-7th' ; not tied -> '7TH'. tie_style 'none' keeps the old plain ordinal."""
+    text = ordinal(rank, ordinal_case)
+    if tied and tie_style in ("joint", "co"):
+        return tie_prefix(tie_style, ordinal_case) + text
+    if tied and AWARD_MARK_TIES:
+        text += "="
+    return text
+
+
+def split_award_tabs(value):
+    """'open, novice;schools' -> ['open', 'novice', 'schools'] (no repeats, 'open' when empty)."""
+    out = []
+    for part in re.split(r"[,;\n]+", str(value or "")):
+        part = part.strip()
+        if part and part.lower() not in [o.lower() for o in out]:
+            out.append(part)
+    return out or ["open"]
+
+
+def _flag(value, default=False):
+    if value is None or value == "":
+        return default
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("on", "true", "1", "yes")
+
+
+def clean_award_order(value):
+    text = str(value or "").strip().lower()
+    return text if text in ("tab", "reverse", "both") else "tab"
 
 
 def award_headers():
@@ -716,7 +831,8 @@ class TabbycatAPI:
         return result
 
 
-def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixes=None, ordinal_case="upper"):
+def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixes=None, ordinal_case="upper",
+                     team_name_source="long"):
     fmt = normalize_format(debate_format)
     headers = headers_for(fmt)
     low, high = FORMAT_CONFIG[fmt]["expected_speakers"]
@@ -756,6 +872,17 @@ def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixe
         if "id" in st:
             standings_lookup[st["id"]] = st
     api._log(f"Standings lookup: {len(standings_lookup)} entries")
+
+    # v3.9: remark for teams tied on points AND total speaker score (BP only), judged over the WHOLE standings
+    tie_remarks = {}
+    if fmt == "bp":
+        values_by_team = {}
+        for st in standings:
+            tid = extract_id_from_url(st.get("team", ""))
+            if tid:
+                values_by_team[str(tid)] = extract_metrics("bp", st.get("metrics", []))[0]
+        tie_remarks = bp_tie_remarks(values_by_team)
+        api._log(f"Tie remarks: {len(tie_remarks)} teams")
 
     def team_id_of(bt):
         team_data = bt.get("team")
@@ -798,13 +925,7 @@ def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixe
             api._log(f"Skipping team_id={team_id}: not found")
             continue
 
-        team_name = (
-            team_obj.get("short_name")
-            or team_obj.get("long_name")
-            or team_obj.get("reference")
-            or team_obj.get("code_name")
-            or f"Team {team_id}"
-        )
+        team_name = pick_team_name(team_obj, team_name_source) or f"Team {team_id}"
 
         code_name = (
             team_obj.get("code_name")
@@ -834,7 +955,7 @@ def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixe
         break_text = ordinal(break_rank, ordinal_case) if is_breaking else remark_label(bt.get("remark"))
 
         row = {"break": break_text, "team": team_name, "code_name": code_name, "speakers": speakers_str,
-               "_breaking": is_breaking}
+               "remark": tie_remarks.get(str(team_id), ""), "_breaking": is_breaking}
         row.update(values)
         rows.append(row)
 
@@ -873,6 +994,8 @@ def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixe
         "not_breaking_teams": sum(1 for r in rows if not r["_breaking"]),
         "intro_rows": intro_count,
         "row_count": len(rows) + intro_count,
+        "team_name_source": clean_team_name_source(team_name_source),
+        "tie_remarks": sum(1 for r in rows if r.get("remark")),
         "text_added_to": sorted(suffixes),
         "missing_metrics": missing,
         "debug": " | ".join(api.debug_log),
@@ -880,32 +1003,29 @@ def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixe
     return output.getvalue(), None, metadata
 
 
-def export_awards_csv(api, award_tab, debate_format, intro_rows=True, top_n=AWARD_TOP_N, suffixes=None, ordinal_case="upper"):
+def _collect_award_rows(api, award_tab, fmt, top_n, ordinal_case, tie_style, team_name_source, cache):
     """
-    Top speakers of one speaker tab -> CSV with the columns rank, speaker, team, average.
-    award_tab: 'open' (main speaker tab) | a speaker-category slug such as 'unioncup' | 'replies' (3v3 / WSDC only).
-    Everybody whose rank is <= top_n is exported, so ties at the cut-off can make the list longer than top_n.
+    One speaker tab -> (rows in speaker-tab order, error, info). Each row: rank_num, tied, speaker, team, average.
+    cache: dict shared by all tabs of one export, so speakers / teams / standings are read from the API once.
     """
-    fmt = normalize_format(debate_format)
-    suffixes = suffixes or {}
     tab = re.sub(r"[^a-z0-9_]+", "_", str(award_tab or "open").strip().lower()).strip("_") or "open"
     is_reply = tab in REPLY_TAB_NAMES
     is_open = tab in OPEN_TAB_NAMES
-    try:
-        top_n = max(int(top_n), 1)
-    except (ValueError, TypeError):
-        top_n = AWARD_TOP_N
 
     if is_reply and fmt == "bp":
         return None, "The reply speaker tab only exists for the 3v3 and WSDC formats (BP has no reply speeches).", {}
 
-    speakers = api.get_speakers()
+    if "speakers" not in cache:
+        cache["speakers"] = api.get_speakers()
+    speakers = cache["speakers"]
     if speakers is None:
         return None, "Could not read the speakers list. " + " | ".join(api.debug_log), {}
 
     category = None
     if not is_open and not is_reply:
-        categories = api.get_speaker_categories()
+        if "categories" not in cache:
+            cache["categories"] = api.get_speaker_categories()
+        categories = cache["categories"]
         if categories is None:
             return None, "Could not read the speaker categories. " + " | ".join(api.debug_log), {}
         category = match_speaker_category(categories, tab)
@@ -915,7 +1035,10 @@ def export_awards_csv(api, award_tab, debate_format, intro_rows=True, top_n=AWAR
             return None, f'Speaker tab "{award_tab}" not found. Available: {", ".join(options)}', {}
         api._log(f"Speaker category: {category.get('name')} ({category.get('slug')})")
 
-    path, standings, tried = api.get_speaker_standings(replies=is_reply)
+    key = ("standings", is_reply)
+    if key not in cache:
+        cache[key] = api.get_speaker_standings(replies=is_reply)
+    path, standings, tried = cache[key]
     if path is None:
         which = "reply speaker" if is_reply else "speaker"
         status_hint = ""
@@ -932,8 +1055,10 @@ def export_awards_csv(api, award_tab, debate_format, intro_rows=True, top_n=AWAR
             speaker_lookup[str(sp["id"])] = sp
         if norm_url(sp.get("url")):
             speaker_lookup[norm_url(sp.get("url"))] = sp
+    if "teams" not in cache:
+        cache["teams"] = api.get_teams()
     team_lookup = {}
-    for team in api.get_teams():
+    for team in cache["teams"]:
         if team.get("id") is not None:
             team_lookup[str(team["id"])] = team
         if norm_url(team.get("url")):
@@ -972,50 +1097,104 @@ def export_awards_csv(api, award_tab, debate_format, intro_rows=True, top_n=AWAR
     if not rows:
         return None, f'No speakers found for the "{award_tab}" tab. ' + " | ".join(api.debug_log), {}
 
-    rows = rank_group(rows)
+    rows = rank_group(rows)                      # speaker-tab order (rank, then the standings order for ties)
     chosen = [r for r in rows if r["group_rank"] <= top_n]
 
-    headers = award_headers()
     out_rows = []
     for r in chosen:
         sp = r["speaker"]
         team_obj = team_lookup.get(norm_url(sp.get("team"))) or team_lookup.get(str(extract_id_from_url(norm_url(sp.get("team")))))
-        team_name = ""
-        if team_obj:
-            team_name = (team_obj.get("short_name") or team_obj.get("long_name") or team_obj.get("reference")
-                         or team_obj.get("code_name") or "")
-        rank_text = ordinal(r["group_rank"], ordinal_case) + ("=" if AWARD_MARK_TIES and r["tied"] else "")
         out_rows.append({
-            "rank": rank_text, "speaker": sp.get("name", ""), "team": team_name,
+            "rank_num": r["group_rank"], "tied": r["tied"], "speaker": sp.get("name", ""),
+            "team": pick_team_name(team_obj, team_name_source) if team_obj else "",
             "average": format_fixed(r["average"], AWARD_AVG_DECIMALS),
         })
+    label = "Reply speakers" if is_reply else (category.get("name") if category else "Open speakers")
+    cat_label = "Reply" if is_reply else (category.get("name", "") if category else "")
+    info = {"tab": tab, "tab_label": label, "category_label": cat_label, "standings_path": path,
+            "speakers_in_tab": len(rows), "exported_speakers": len(out_rows), "ties_at_cutoff": len(out_rows) > top_n,
+            "missing_avg": sum(1 for r in out_rows if r["average"] == "")}
+    return out_rows, None, info
 
+
+def _awards_csv_text(sections, headers, intro_rows, suffixes, ordinal_case, tie_style, first_plain, reverse):
+    """sections: [(category label, rows in speaker-tab order)] -> CSV text. reverse=True: each tab from the last place to 1st."""
     output = io.StringIO()
     writer = csv.writer(output)
     writer.writerow(headers)
     intro_count = 0
-    for row in out_rows:
-        if intro_rows:
-            intro = [("" if h in AWARD_INTRO_BLANK else row.get(h, "")) for h in headers]
-            writer.writerow(apply_suffixes(headers, intro, suffixes))
-            intro_count += 1
-        writer.writerow(apply_suffixes(headers, [row.get(h, "") for h in headers], suffixes))
+    for cat_label, rows in sections:
+        rank_text = " ".join(str(suffixes.get("rank", "")).replace("{category}", cat_label).split())
+        other = {k: v for k, v in suffixes.items() if k != "rank"}
+        for row in (reversed(rows) if reverse else rows):
+            if first_plain and rank_text and row["rank_num"] == 1:
+                rank_cell = (tie_prefix(tie_style, ordinal_case) if row["tied"] else "") + rank_text
+            else:
+                rank_cell = award_rank_label(row["rank_num"], row["tied"], ordinal_case, tie_style)
+                rank_cell = f"{rank_cell} {rank_text}" if rank_text else rank_cell
+            base = {"rank": rank_cell, "speaker": row["speaker"], "team": row["team"], "average": row["average"]}
+            if intro_rows:
+                intro = [(("" if h in AWARD_INTRO_BLANK else base.get(h, ""))) for h in headers]
+                writer.writerow(apply_suffixes(headers, intro, other))
+                intro_count += 1
+            writer.writerow(apply_suffixes(headers, [base.get(h, "") for h in headers], other))
+    return output.getvalue(), intro_count
 
-    missing_avg = sum(1 for r in out_rows if r["average"] == "")
+
+def export_awards_csv(api, award_tab, debate_format, intro_rows=True, top_n=AWARD_TOP_N, suffixes=None, ordinal_case="upper",
+                      team_name_source="long", tie_style="joint", award_order="tab", first_plain=False):
+    """
+    Top speakers of one or SEVERAL speaker tabs -> CSV with the columns rank, speaker, team, average.
+    award_tab: 'open' (main speaker tab) | a speaker-category slug such as 'unioncup' | 'replies' (3v3 / WSDC only),
+               or several separated by commas: 'open, novice, schools'.
+    Everybody whose rank is <= top_n is exported (per tab), so ties at the cut-off can make the list longer than top_n.
+    award_order: 'tab' (1st -> 10th, as on the tab) | 'reverse' (10th -> 1st) | 'both' (the first file is returned, the reversed
+                 one is in metadata['extra_files']).
+    suffixes['rank'] may contain {category} (the speaker category's name; empty for the open tab).
+    """
+    fmt = normalize_format(debate_format)
+    suffixes = suffixes or {}
+    tie_style = clean_tie_style(tie_style)
+    award_order = clean_award_order(award_order)
+    try:
+        top_n = max(int(top_n), 1)
+    except (ValueError, TypeError):
+        top_n = AWARD_TOP_N
+
+    tabs = award_tab if isinstance(award_tab, list) else split_award_tabs(award_tab)
+    cache, sections, infos = {}, [], []
+    for tab_name in tabs:
+        rows, error, info = _collect_award_rows(api, tab_name, fmt, top_n, ordinal_case, tie_style, team_name_source, cache)
+        if error:
+            return None, (f'[{tab_name}] {error}' if len(tabs) > 1 else error), {}
+        sections.append((info["category_label"], rows))
+        infos.append(info)
+
+    headers = award_headers()
+    plain = bool(first_plain)
+    first_text, intro_count = _awards_csv_text(sections, headers, intro_rows, suffixes, ordinal_case, tie_style, plain,
+                                               reverse=(award_order == "reverse"))
+    extra = {}
+    if award_order == "both":
+        extra["reverse"], _ = _awards_csv_text(sections, headers, intro_rows, suffixes, ordinal_case, tie_style, plain, True)
+
+    missing_avg = sum(i["missing_avg"] for i in infos)
     if missing_avg:
         api._log(f"{missing_avg} exported speaker(s) have no average in the standings (cell left blank)")
-    label = "Reply speakers" if is_reply else (category.get("name") if category else "Open speakers")
+    exported = sum(i["exported_speakers"] for i in infos)
     metadata = {
-        "export_type": "awards", "tab": tab, "tab_label": label, "standings_path": path,
-        "debate_format": fmt, "ordinal_case": ordinal_case, "columns": headers, "top_n": top_n,
-        "speakers_in_tab": len(rows), "exported_speakers": len(out_rows),
-        "ties_at_cutoff": len(out_rows) > top_n,
+        "export_type": "awards", "tab": ",".join(i["tab"] for i in infos),
+        "tab_label": ", ".join(i["tab_label"] for i in infos), "standings_path": infos[0]["standings_path"],
+        "tabs": infos, "debate_format": fmt, "ordinal_case": ordinal_case, "columns": headers, "top_n": top_n,
+        "award_order": award_order, "tie_style": tie_style, "extra_files": extra,
+        "speakers_in_tab": sum(i["speakers_in_tab"] for i in infos), "exported_speakers": exported,
+        "ties_at_cutoff": any(i["ties_at_cutoff"] for i in infos),
         "text_added_to": sorted(suffixes),
-        "intro_rows": intro_count, "row_count": len(out_rows) + intro_count,
+        "intro_rows": intro_count, "row_count": exported + intro_count,
         "missing_metrics": ["average"] if missing_avg else [],
         "debug": " | ".join(api.debug_log),
     }
-    return output.getvalue(), None, metadata
+    return first_text, None, metadata
 
 
 def run_export(api, params):
@@ -1025,12 +1204,17 @@ def run_export(api, params):
     suffixes = clean_suffixes(params)
     ordinal_case = clean_ordinal_case(params.get("ordinal_case"))
     fmt = normalize_format(params.get("debate_format", "bp"))
+    team_name_source = clean_team_name_source(params.get("team_name"))
     if export_type in ("awards", "award", "speakers"):
-        tab = str(params.get("award_tab") or "open").strip().lower()
-        csv_text, error, meta = export_awards_csv(api, tab, fmt, intro_rows, params.get("top_n") or AWARD_TOP_N, suffixes, ordinal_case)
-        return csv_text, error, meta, f"{re.sub(r'[^a-z0-9_]+', '_', tab) or 'open'}_awards"
+        tabs = split_award_tabs(params.get("award_tab"))
+        csv_text, error, meta = export_awards_csv(
+            api, tabs, fmt, intro_rows, params.get("top_n") or AWARD_TOP_N, suffixes, ordinal_case, team_name_source,
+            clean_tie_style(params.get("tie_style")), clean_award_order(params.get("award_order")),
+            _flag(params.get("first_plain")))
+        name = re.sub(r"[^a-z0-9_]+", "_", tabs[0].lower()).strip("_") or "open"
+        return csv_text, error, meta, (f"{name}_awards" if len(tabs) == 1 else "multi_awards")
     category_slug = str(params.get("category_slug") or "").strip().lower()
-    csv_text, error, meta = export_break_csv(api, category_slug, fmt, intro_rows, suffixes, ordinal_case)
+    csv_text, error, meta = export_break_csv(api, category_slug, fmt, intro_rows, suffixes, ordinal_case, team_name_source)
     return csv_text, error, meta, f"{category_slug}_break"
 
 
@@ -1094,6 +1278,10 @@ def _clean_params(source):
         "suffix_average": source.get("suffix_average"),
         "suffix_rank": source.get("suffix_rank"),
         "ordinal_case": source.get("ordinal_case"),
+        "team_name": source.get("team_name"),
+        "tie_style": source.get("tie_style"),
+        "award_order": source.get("award_order"),
+        "first_plain": source.get("first_plain"),
         "suffixes": source.get("suffixes"),
     }
 
@@ -1167,6 +1355,16 @@ def export():
         flash(error, "error")
         return redirect(url_for("index"))
 
+    extra = (metadata or {}).get("extra_files") or {}
+    if extra:                                   # awards, both orders -> one ZIP with two CSV files
+        base = f"{params['slug']}_{suffix}"
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(f"{base}_1st_to_last_tab_order.csv", csv_data.encode("utf-8"))
+            zf.writestr(f"{base}_last_to_1st_reversed.csv", extra["reverse"].encode("utf-8"))
+        buffer.seek(0)
+        response = send_file(buffer, mimetype="application/zip", as_attachment=True, download_name=f"{base}.zip")
+        return response
     filename = f"{params['slug']}_{suffix}.csv"
     buffer = io.BytesIO(csv_data.encode("utf-8"))
     response = send_file(buffer, mimetype="text/csv", as_attachment=True, download_name=filename)
@@ -1191,7 +1389,11 @@ def api_export():
     if error:
         return jsonify({"ok": False, "error": error, "debug": metadata.get("debug", "")}), 400
 
-    return jsonify({"ok": True, "csv": csv_data, "metadata": metadata})
+    extra = metadata.pop("extra_files", None) or {}
+    payload = {"ok": True, "csv": csv_data, "metadata": metadata}
+    if "reverse" in extra:
+        payload["csv_reversed"] = extra["reverse"]
+    return jsonify(payload)
 
 
 @app.route("/api/export-csv", methods=["POST"])
@@ -1253,6 +1455,11 @@ def api_debug():
 
     result["final_debug_log"] = list(api.debug_log)
     return jsonify(result)
+
+
+# Judges who judged N+ preliminary rounds -> .csv (page /judge-rounds), moved here from the importer
+from judge_rounds import register_judge_rounds
+register_judge_rounds(app)
 
 
 if __name__ == "__main__":
