@@ -256,11 +256,16 @@ def pick_team_name(team_obj, source="long"):
     return ""
 
 
+TIE_SECONDS_REMARK = "Tie broken by number of seconds"
+TIE_LEVELS = (("number_of_1sts", TIE_FIRSTS_REMARK), ("number_of_2nds", TIE_SECONDS_REMARK),
+              ("draw_strength_by_wins", TIE_DRAW_REMARK))
+
+
 def bp_tie_remarks(values_by_team):
     """
-    values_by_team: team id -> BP metric texts (points, total_speaker_score, number_of_1sts, draw_strength_by_wins).
-    Teams with the same points AND total speaker score are tied. A team whose number of 1sts is unique inside its tie
-    was separated by the firsts; teams that share their firsts were separated by the draw strength by wins.
+    values_by_team: team id -> BP metric texts. Teams with the same points AND total speaker score are tied. The tie is
+    then split in this order: number of 1sts, number of 2nds, draw strength by wins. A team gets the remark of the FIRST
+    metric on which it differs from every other team still tied with it. A metric nobody in the tie has is skipped.
     -> {team id: remark}
     """
     groups = {}
@@ -271,20 +276,23 @@ def bp_tie_remarks(values_by_team):
     for members in groups.values():
         if len(members) < 2:
             continue
-        firsts = Counter(values_by_team[t].get("number_of_1sts", "") for t in members)
         for tid in members:
-            f = values_by_team[tid].get("number_of_1sts", "")
-            if f == "":
-                continue
-            if firsts[f] == 1:
-                remarks[tid] = TIE_FIRSTS_REMARK
-                continue
-            same = [t for t in members if values_by_team[t].get("number_of_1sts", "") == f]
-            draw = Counter(values_by_team[t].get("draw_strength_by_wins", "") for t in same)
-            d = values_by_team[tid].get("draw_strength_by_wins", "")
-            if d == "":
-                continue
-            remarks[tid] = TIE_DRAW_REMARK if draw[d] == 1 else TIE_OPEN_REMARK
+            still, used = list(members), False
+            for metric, text in TIE_LEVELS:
+                mine = values_by_team[tid].get(metric, "")
+                if all(values_by_team[t].get(metric, "") == "" for t in still):
+                    continue                                   # metric not available for these teams: skip it
+                used = True
+                if mine == "":
+                    break
+                same = [t for t in still if values_by_team[t].get(metric, "") == mine]
+                if len(same) == 1:
+                    remarks[tid] = text
+                    break
+                still = same
+            else:
+                if used:
+                    remarks[tid] = TIE_OPEN_REMARK
     return remarks
 
 
@@ -832,9 +840,10 @@ class TabbycatAPI:
 
 
 def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixes=None, ordinal_case="upper",
-                     team_name_source="long"):
+                     team_name_source="long", cache=None, category_column=False):
     fmt = normalize_format(debate_format)
-    headers = headers_for(fmt)
+    headers = headers_for(fmt) + (["category"] if category_column else [])
+    cache = cache if cache is not None else {}
     low, high = FORMAT_CONFIG[fmt]["expected_speakers"]
     suffixes = suffixes or {}
 
@@ -846,12 +855,18 @@ def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixe
         return None, f'Category "{category_slug}" not found. Available: {", ".join(slugs) or "none"}', {}
 
     api._log(f"Category: {category_info.get('name')} (id={category_id}) | format: {FORMAT_CONFIG[fmt]['label']}")
+    cat_name = (category_info or {}).get("name", "") or category_slug
+    if "break" in suffixes:                      # {category} in the text after the break rank
+        suffixes = dict(suffixes)
+        suffixes["break"] = " ".join(suffixes["break"].replace("{category}", cat_name).split())
 
     breaking = api.get_breaking_teams(category_id)
     if not breaking:
         return None, f'No breaking teams found for "{category_slug}". {" | ".join(api.debug_log)}', {}
 
-    all_teams = api.get_teams()
+    if "teams" not in cache:
+        cache["teams"] = api.get_teams()
+    all_teams = cache["teams"]
     team_lookup = {}
     for team in all_teams:
         tid = extract_id_from_url(team.get("url", ""))
@@ -861,7 +876,9 @@ def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixe
             team_lookup[team["id"]] = team
     api._log(f"Teams lookup: {len(team_lookup)} entries")
 
-    standings = api.get_team_standings()
+    if "standings" not in cache:
+        cache["standings"] = api.get_team_standings()
+    standings = cache["standings"]
     standings_lookup = {}
     standings_position = {}                       # team id -> standings rank (or position) = fallback for the order
     for position, st in enumerate(standings, start=1):
@@ -955,7 +972,7 @@ def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixe
         break_text = ordinal(break_rank, ordinal_case) if is_breaking else remark_label(bt.get("remark"))
 
         row = {"break": break_text, "team": team_name, "code_name": code_name, "speakers": speakers_str,
-               "remark": tie_remarks.get(str(team_id), ""), "_breaking": is_breaking}
+               "remark": tie_remarks.get(str(team_id), ""), "category": cat_name, "_breaking": is_breaking}
         row.update(values)
         rows.append(row)
 
@@ -1213,9 +1230,33 @@ def run_export(api, params):
             _flag(params.get("first_plain")))
         name = re.sub(r"[^a-z0-9_]+", "_", tabs[0].lower()).strip("_") or "open"
         return csv_text, error, meta, (f"{name}_awards" if len(tabs) == 1 else "multi_awards")
-    category_slug = str(params.get("category_slug") or "").strip().lower()
-    csv_text, error, meta = export_break_csv(api, category_slug, fmt, intro_rows, suffixes, ordinal_case, team_name_source)
-    return csv_text, error, meta, f"{category_slug}_break"
+    slugs = split_award_tabs(params.get("category_slug")) if "," in str(params.get("category_slug") or "") \
+        or ";" in str(params.get("category_slug") or "") else [str(params.get("category_slug") or "").strip().lower()]
+    if len(slugs) == 1:
+        csv_text, error, meta = export_break_csv(api, slugs[0].lower(), fmt, intro_rows, suffixes, ordinal_case, team_name_source)
+        return csv_text, error, meta, f"{slugs[0].lower()}_break"
+    # several break categories -> ONE csv (same columns + a last "category" column), categories in the order typed
+    cache, merged, metas = {}, [], []
+    for slug in slugs:
+        text, error, meta = export_break_csv(api, slug.lower(), fmt, intro_rows, suffixes, ordinal_case, team_name_source,
+                                             cache=cache, category_column=True)
+        if error:
+            return None, f"[{slug}] {error}", {}, ""
+        table = list(csv.reader(io.StringIO(text)))
+        merged += table if not merged else table[1:]
+        metas.append(meta)
+    output = io.StringIO()
+    csv.writer(output).writerows(merged)
+    meta = dict(metas[0])
+    meta.update({"category_name": ", ".join(m["category_name"] for m in metas), "category_slug": ",".join(slugs),
+                 "categories": [m["category_name"] for m in metas],
+                 "columns": merged[0], "team_count": sum(m["team_count"] for m in metas),
+                 "breaking_teams": sum(m["breaking_teams"] for m in metas),
+                 "not_breaking_teams": sum(m["not_breaking_teams"] for m in metas),
+                 "intro_rows": sum(m["intro_rows"] for m in metas), "row_count": len(merged) - 1,
+                 "tie_remarks": sum(m["tie_remarks"] for m in metas),
+                 "debug": " | ".join(api.debug_log)})
+    return output.getvalue(), None, meta, "multi_break"
 
 
 def _intro_flag(value, default=True):
