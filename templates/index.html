@@ -122,7 +122,7 @@
 <body>
     <h1>Tabbycat Break Exporter <span style="font-size:14px;color:#888;">v1.0</span></h1>
     <p class="subtitle">Export breaking teams or top speakers to CSV for automated break / awarding slides</p>
-    <p class="hint" style="margin-top:-15px;margin-bottom:20px;">&#128230; Also: <a href="/barcodes">check-in barcodes for name tags (Canva / Slides) &rarr;</a></p>
+    <p class="hint" style="margin-top:-15px;margin-bottom:20px;">&#128230; Also: <a href="/barcodes">check-in barcodes for name tags (Canva / Slides) &rarr;</a> &nbsp;&middot;&nbsp; <a href="/judge-rounds">judges by preliminary rounds judged (.csv) &rarr;</a></p>
 
     {% with messages = get_flashed_messages(with_categories=true) %}
       {% if messages %}
@@ -173,8 +173,21 @@
                 </div>
                 <div id="award_fields" style="display:none;">
                     <label for="award_tab">Speaker Tab</label>
-                    <input type="text" name="award_tab" id="award_tab" placeholder="open" value="open">
-                    <p class="hint"><code>open</code> = main speaker tab, a speaker category slug (e.g. <code>unioncup</code>), or <code>replies</code> (3v3 / WSDC only). Test Connection lists the options.</p>
+                    <input type="text" name="award_tab" id="award_tab" placeholder="open, novice, schools, efl" value="open">
+                    <p class="hint"><code>open</code> = main speaker tab, a speaker category slug (e.g. <code>unioncup</code>), or <code>replies</code> (3v3 / WSDC only). <strong>Several tabs in one file:</strong> separate them with commas, e.g. <code>open, novice, schools</code>. Test Connection lists the options.</p>
+                    <label for="award_order">Order of the speakers</label>
+                    <select name="award_order" id="award_order">
+                        <option value="both" selected>Both &mdash; ZIP with two files: 1st &rarr; last (as on the tab) and last &rarr; 1st (for the slides)</option>
+                        <option value="tab">Speaker-tab order only (1st &rarr; last)</option>
+                        <option value="reverse">Reversed only (last &rarr; 1st)</option>
+                    </select>
+                    <p class="hint">Speakers tied on a rank keep the order of the tab's standings. In the reversed file each tab is turned around completely, so the tied speakers come in reverse too.</p>
+                    <label for="tie_style">Ties</label>
+                    <select name="tie_style" id="tie_style">
+                        <option value="joint" selected>Joint &mdash; JOINT 7TH</option>
+                        <option value="co">co- &mdash; CO-7TH</option>
+                        <option value="none">Nothing added &mdash; 7TH</option>
+                    </select>
                     <label for="top_n">Top how many?</label>
                     <input type="number" name="top_n" id="top_n" value="10" min="1" max="100">
                     <p class="hint">Everybody ranked this number or better is included, so a tie at the cut-off can make the list longer.</p>
@@ -195,6 +208,14 @@
                 <option value="off">No &mdash; one row each</option>
             </select>
             <p class="hint">The intro row repeats the rank and the numbers but leaves the team and speaker names blank, so the slides can show the numbers first and reveal the name on the next slide.</p>
+
+            <label for="team_name">Team name</label>
+            <select name="team_name" id="team_name">
+                <option value="long" selected>Full name (long_name) &mdash; not cut off</option>
+                <option value="short">Short name (short_name)</option>
+                <option value="reference">Reference only (without the institution)</option>
+            </select>
+            <p class="hint">Used in the break and in the awarding export. Teams without a long name fall back to the next one.</p>
 
             <label for="ordinal_case">Letters in the rank (1ST / 1st)</label>
             <select name="ordinal_case" id="ordinal_case">
@@ -226,8 +247,9 @@
                 </div>
                 <div id="suffix_rank_group" style="display:none;">
                     <label for="suffix_rank">After the speaker rank (awarding slides)</label>
-                    <input type="text" name="suffix_rank" id="suffix_rank" placeholder="BEST EFL SPEAKER">
-                    <p class="hint">2ND &rarr; <code>2ND BEST EFL SPEAKER</code></p>
+                    <input type="text" name="suffix_rank" id="suffix_rank" placeholder="Best {category} Speaker">
+                    <p class="hint">2ND &rarr; <code>2ND BEST EFL SPEAKER</code>. <code>{category}</code> is replaced by each speaker category's name (nothing for the open tab), so one text works for all tabs: <code>Best {category} Speaker</code> &rarr; 2ND Best Novice Speaker / 2ND Best Speaker.</p>
+                    <label style="font-weight:normal;"><input type="checkbox" name="first_plain" id="first_plain"> 1st place without the number: <code>Best Novice Speaker</code> instead of <code>1ST Best Novice Speaker</code></label>
                 </div>
                 <div id="suffix_average_group" style="display:none;">
                     <label for="suffix_average">After the average (awarding slides)</label>
@@ -265,14 +287,19 @@
   "suffix_score": "Speaker Points",       //   total speaker score / average total speaker score
   "suffix_rank": "BEST EFL SPEAKER",      //   awards: the rank ("2ND BEST EFL SPEAKER")
   "suffix_average": "average speaks",     //   awards: the average
-  "ordinal_case": "upper"                 // "upper" (1ST) or "lower" (1st)
+  "ordinal_case": "upper",                // "upper" (1ST) or "lower" (1st)
+  "team_name": "long",                    // "long" (default), "short" or "reference"
+  "award_tab": "open, novice, schools",   // awards: several tabs in one file
+  "award_order": "tab",                   // awards: "tab" (default), "reverse" or "both" (/api/export then also returns csv_reversed)
+  "tie_style": "joint",                   // awards: "joint" (JOINT 7TH), "co" (CO-7TH) or "none"
+  "first_plain": false                    // awards: 1st place without the number (needs suffix_rank)
 }</pre>
         <p class="hint"><code>intro_rows</code> is optional (default <code>true</code>); send <code>false</code> for one row each. For <code>"export_type": "awards"</code> the columns are <code>rank, speaker, team, average</code> and <code>category_slug</code> is not needed. In the break file the Break column holds the break rank, or the remark (Capped, Ineligible, Reserve, Withdrawn) of a team that is not breaking.</p>
     </div>
 
     <script>
         const COLUMNS = {
-            bp:   'break, team, code_name, speakers (A & B), points, total_speaker_score, number_of_1sts, number_of_2nds, draw_strength_by_wins',
+            bp:   'break, team, code_name, speakers (A & B), points, total_speaker_score, number_of_1sts, number_of_2nds, draw_strength_by_wins, remark (ties)',
             '3v3': 'break, team, code_name, speakers (A, B, C), wins, total_speaker_score',
             wsdc: 'break, team, code_name, speakers (A, B, C, ...), wins, average_total_speaker_score'
         };
