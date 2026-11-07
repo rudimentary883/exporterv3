@@ -1,4 +1,8 @@
 """
+Tabbycat Break Exporter v3.10
+  * v3.10: optional "institution" column (break + awards; form select "Institution column": off | code | name, JSON key "institution"),
+           blank on intro rows; the tie remark now sits on the INTRO row (full row left blank) when intro rows are on;
+           reserve / capped / ineligible / withdrawn ... teams get their own intro row too, only "Different break" teams stay one row
 Tabbycat Break Exporter v3.9
   * v3.9: team names come from long_name first (short_name cut long names off); option team_name = long | short | reference
           + BP break export: new last column "remark" for teams tied on points AND total speaker score:
@@ -90,14 +94,15 @@ FORMAT_CONFIG = {
     },
 }
 # Columns that are never filled on an "intro" row (it only carries the break rank and the numbers)
-INTRO_BLANK_COLUMNS = {"team", "code_name", "speakers", "remark"}
+INTRO_BLANK_COLUMNS = {"team", "code_name", "speakers", "remark"}          # (v3.9, no longer used)
+INTRO_BLANK_NO_REMARK = {"team", "code_name", "speakers", "institution"}   # v3.10: the intro row now carries the remark
 ATSS_DECIMALS = 2
 
 # ---------------------------------------------------------------------------------------------------------------
 # Awarding slides (speaker tabs). The column names are the slide placeholders: {{rank}} {{speaker}} {{team}} {{average}}
 # ---------------------------------------------------------------------------------------------------------------
 AWARD_HEADERS = ["rank", "speaker", "team", "average"]
-AWARD_INTRO_BLANK = {"speaker", "team"}                 # not filled on an intro row
+AWARD_INTRO_BLANK = {"speaker", "team", "institution"}                 # not filled on an intro row
 AWARD_TOP_N = 10                                        # everybody ranked <= this number is exported (ties included)
 AWARD_AVG_DECIMALS = 2
 AWARD_MARK_TIES = False                                 # True -> tied speakers read "3RD=" instead of "3RD"
@@ -427,6 +432,49 @@ def remark_label(value):
         return ""
     text = str(value).strip()
     return REMARK_LABELS.get(text, text)
+
+
+def clean_institution_mode(value):
+    """'' (off, default) | 'code' | 'name'. True / on / yes / code / short -> code; name / full / long -> name."""
+    if isinstance(value, bool):
+        return "code" if value else ""
+    text = str(value or "").strip().lower()
+    if text in ("name", "full", "long", "full_name"):
+        return "name"
+    if text in ("code", "short", "on", "true", "yes", "1"):
+        return "code"
+    return ""
+
+
+def get_institution_lookup(api, cache):
+    """id / url -> institution object (global /api/v1/institutions), read once per export."""
+    if "institutions" not in cache:
+        lookup = {}
+        data = api._get_list(f"{api.base_url}/api/v1/institutions")
+        if isinstance(data, dict) and "_error" in data:
+            api._log(f"Institutions could not be read: {data.get('_error')} status={data.get('_status')} (institution column left blank)")
+        else:
+            for inst in data:
+                if isinstance(inst, dict):
+                    if inst.get("id") is not None:
+                        lookup[str(inst["id"])] = inst
+                    if norm_url(inst.get("url")):
+                        lookup[norm_url(inst.get("url"))] = inst
+            api._log(f"Institutions: {len(data)}")
+        cache["institutions"] = lookup
+    return cache["institutions"]
+
+
+def institution_text(team_obj, lookup, mode):
+    """The team's institution as the tab shows it (code) or its full name; '' for a team without institution."""
+    if not team_obj or not mode:
+        return ""
+    ref = team_obj.get("institution")
+    inst = ref if isinstance(ref, dict) else (lookup.get(norm_url(ref)) or lookup.get(str(extract_id_from_url(norm_url(ref)))))
+    if not inst:
+        return ""
+    key = "name" if mode == "name" else "code"
+    return str(inst.get(key) or inst.get("name" if key == "code" else "code") or "").strip()
 
 
 def rank_number(value):
@@ -840,10 +888,14 @@ class TabbycatAPI:
 
 
 def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixes=None, ordinal_case="upper",
-                     team_name_source="long", cache=None, category_column=False):
+                     team_name_source="long", cache=None, category_column=False, institution_mode=""):
     fmt = normalize_format(debate_format)
     headers = headers_for(fmt) + (["category"] if category_column else [])
+    institution_mode = clean_institution_mode(institution_mode)
+    if institution_mode:                                   # v3.10: optional column right after "team"
+        headers.insert(headers.index("team") + 1, "institution")
     cache = cache if cache is not None else {}
+    inst_lookup = get_institution_lookup(api, cache) if institution_mode else {}
     low, high = FORMAT_CONFIG[fmt]["expected_speakers"]
     suffixes = suffixes or {}
 
@@ -972,7 +1024,9 @@ def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixe
         break_text = ordinal(break_rank, ordinal_case) if is_breaking else remark_label(bt.get("remark"))
 
         row = {"break": break_text, "team": team_name, "code_name": code_name, "speakers": speakers_str,
-               "remark": tie_remarks.get(str(team_id), ""), "category": cat_name, "_breaking": is_breaking}
+               "remark": tie_remarks.get(str(team_id), ""), "category": cat_name, "_breaking": is_breaking,
+               "institution": institution_text(team_obj, inst_lookup, institution_mode),
+               "_different": remark_label(bt.get("remark")) == "Different break" and not is_breaking}
         row.update(values)
         rows.append(row)
 
@@ -991,12 +1045,14 @@ def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixe
     intro_count = 0
     for row in rows:
         full = [row.get(h, "") for h in headers]
-        # "intro" row = same break rank + numbers, but no team / code_name / speakers.
-        # Only for teams that really break (not for capped / ineligible / reserve / withdrawn teams).
-        if intro_rows and row["_breaking"]:
-            intro = [("" if h in INTRO_BLANK_COLUMNS else row.get(h, "")) for h in headers]
-            writer.writerow(apply_suffixes(headers, intro, suffixes, True))
+        # "intro" row = same break rank (or remark) + numbers + tie remark, but no team / code_name / speakers / institution.
+        # v3.10: every team gets one (also reserve / capped / ineligible / withdrawn ...), except "Different break" teams.
+        if intro_rows and not row["_different"]:
+            intro = [("" if h in INTRO_BLANK_NO_REMARK else row.get(h, "")) for h in headers]
+            writer.writerow(apply_suffixes(headers, intro, suffixes, row["_breaking"]))
             intro_count += 1
+            if "remark" in headers:                      # the remark is shown on the intro row, the full row keeps it blank
+                full[headers.index("remark")] = ""
         writer.writerow(apply_suffixes(headers, full, suffixes, row["_breaking"]))
 
     metadata = {
@@ -1013,6 +1069,7 @@ def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixe
         "row_count": len(rows) + intro_count,
         "team_name_source": clean_team_name_source(team_name_source),
         "tie_remarks": sum(1 for r in rows if r.get("remark")),
+        "institution_column": institution_mode or "off",
         "text_added_to": sorted(suffixes),
         "missing_metrics": missing,
         "debug": " | ".join(api.debug_log),
@@ -1020,7 +1077,7 @@ def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixe
     return output.getvalue(), None, metadata
 
 
-def _collect_award_rows(api, award_tab, fmt, top_n, ordinal_case, tie_style, team_name_source, cache):
+def _collect_award_rows(api, award_tab, fmt, top_n, ordinal_case, tie_style, team_name_source, cache, institution_mode=""):
     """
     One speaker tab -> (rows in speaker-tab order, error, info). Each row: rank_num, tied, speaker, team, average.
     cache: dict shared by all tabs of one export, so speakers / teams / standings are read from the API once.
@@ -1117,6 +1174,7 @@ def _collect_award_rows(api, award_tab, fmt, top_n, ordinal_case, tie_style, tea
     rows = rank_group(rows)                      # speaker-tab order (rank, then the standings order for ties)
     chosen = [r for r in rows if r["group_rank"] <= top_n]
 
+    inst_lookup = get_institution_lookup(api, cache) if institution_mode else {}
     out_rows = []
     for r in chosen:
         sp = r["speaker"]
@@ -1124,6 +1182,7 @@ def _collect_award_rows(api, award_tab, fmt, top_n, ordinal_case, tie_style, tea
         out_rows.append({
             "rank_num": r["group_rank"], "tied": r["tied"], "speaker": sp.get("name", ""),
             "team": pick_team_name(team_obj, team_name_source) if team_obj else "",
+            "institution": institution_text(team_obj, inst_lookup, institution_mode),
             "average": format_fixed(r["average"], AWARD_AVG_DECIMALS),
         })
     label = "Reply speakers" if is_reply else (category.get("name") if category else "Open speakers")
@@ -1149,7 +1208,8 @@ def _awards_csv_text(sections, headers, intro_rows, suffixes, ordinal_case, tie_
             else:
                 rank_cell = award_rank_label(row["rank_num"], row["tied"], ordinal_case, tie_style)
                 rank_cell = f"{rank_cell} {rank_text}" if rank_text else rank_cell
-            base = {"rank": rank_cell, "speaker": row["speaker"], "team": row["team"], "average": row["average"]}
+            base = {"rank": rank_cell, "speaker": row["speaker"], "team": row["team"], "average": row["average"],
+                    "institution": row.get("institution", "")}
             if intro_rows:
                 intro = [(("" if h in AWARD_INTRO_BLANK else base.get(h, ""))) for h in headers]
                 writer.writerow(apply_suffixes(headers, intro, other))
@@ -1159,7 +1219,7 @@ def _awards_csv_text(sections, headers, intro_rows, suffixes, ordinal_case, tie_
 
 
 def export_awards_csv(api, award_tab, debate_format, intro_rows=True, top_n=AWARD_TOP_N, suffixes=None, ordinal_case="upper",
-                      team_name_source="long", tie_style="joint", award_order="tab", first_plain=False):
+                      team_name_source="long", tie_style="joint", award_order="tab", first_plain=False, institution_mode=""):
     """
     Top speakers of one or SEVERAL speaker tabs -> CSV with the columns rank, speaker, team, average.
     award_tab: 'open' (main speaker tab) | a speaker-category slug such as 'unioncup' | 'replies' (3v3 / WSDC only),
@@ -1171,6 +1231,7 @@ def export_awards_csv(api, award_tab, debate_format, intro_rows=True, top_n=AWAR
     """
     fmt = normalize_format(debate_format)
     suffixes = suffixes or {}
+    institution_mode = clean_institution_mode(institution_mode)
     tie_style = clean_tie_style(tie_style)
     award_order = clean_award_order(award_order)
     try:
@@ -1181,13 +1242,15 @@ def export_awards_csv(api, award_tab, debate_format, intro_rows=True, top_n=AWAR
     tabs = award_tab if isinstance(award_tab, list) else split_award_tabs(award_tab)
     cache, sections, infos = {}, [], []
     for tab_name in tabs:
-        rows, error, info = _collect_award_rows(api, tab_name, fmt, top_n, ordinal_case, tie_style, team_name_source, cache)
+        rows, error, info = _collect_award_rows(api, tab_name, fmt, top_n, ordinal_case, tie_style, team_name_source, cache, institution_mode)
         if error:
             return None, (f'[{tab_name}] {error}' if len(tabs) > 1 else error), {}
         sections.append((info["category_label"], rows))
         infos.append(info)
 
     headers = award_headers()
+    if institution_mode:                                   # v3.10: optional column right after "team"
+        headers.insert(headers.index("team") + 1, "institution")
     plain = bool(first_plain)
     first_text, intro_count = _awards_csv_text(sections, headers, intro_rows, suffixes, ordinal_case, tie_style, plain,
                                                reverse=(award_order == "reverse"))
@@ -1204,6 +1267,7 @@ def export_awards_csv(api, award_tab, debate_format, intro_rows=True, top_n=AWAR
         "tab_label": ", ".join(i["tab_label"] for i in infos), "standings_path": infos[0]["standings_path"],
         "tabs": infos, "debate_format": fmt, "ordinal_case": ordinal_case, "columns": headers, "top_n": top_n,
         "award_order": award_order, "tie_style": tie_style, "extra_files": extra,
+        "institution_column": institution_mode or "off",
         "speakers_in_tab": sum(i["speakers_in_tab"] for i in infos), "exported_speakers": exported,
         "ties_at_cutoff": any(i["ties_at_cutoff"] for i in infos),
         "text_added_to": sorted(suffixes),
@@ -1222,24 +1286,26 @@ def run_export(api, params):
     ordinal_case = clean_ordinal_case(params.get("ordinal_case"))
     fmt = normalize_format(params.get("debate_format", "bp"))
     team_name_source = clean_team_name_source(params.get("team_name"))
+    inst_mode = clean_institution_mode(params.get("institution"))
     if export_type in ("awards", "award", "speakers"):
         tabs = split_award_tabs(params.get("award_tab"))
         csv_text, error, meta = export_awards_csv(
             api, tabs, fmt, intro_rows, params.get("top_n") or AWARD_TOP_N, suffixes, ordinal_case, team_name_source,
             clean_tie_style(params.get("tie_style")), clean_award_order(params.get("award_order")),
-            _flag(params.get("first_plain")))
+            _flag(params.get("first_plain")), institution_mode=inst_mode)
         name = re.sub(r"[^a-z0-9_]+", "_", tabs[0].lower()).strip("_") or "open"
         return csv_text, error, meta, (f"{name}_awards" if len(tabs) == 1 else "multi_awards")
     slugs = split_award_tabs(params.get("category_slug")) if "," in str(params.get("category_slug") or "") \
         or ";" in str(params.get("category_slug") or "") else [str(params.get("category_slug") or "").strip().lower()]
     if len(slugs) == 1:
-        csv_text, error, meta = export_break_csv(api, slugs[0].lower(), fmt, intro_rows, suffixes, ordinal_case, team_name_source)
+        csv_text, error, meta = export_break_csv(api, slugs[0].lower(), fmt, intro_rows, suffixes, ordinal_case, team_name_source,
+                                                 institution_mode=inst_mode)
         return csv_text, error, meta, f"{slugs[0].lower()}_break"
     # several break categories -> ONE csv (same columns + a last "category" column), categories in the order typed
     cache, merged, metas = {}, [], []
     for slug in slugs:
         text, error, meta = export_break_csv(api, slug.lower(), fmt, intro_rows, suffixes, ordinal_case, team_name_source,
-                                             cache=cache, category_column=True)
+                                             cache=cache, category_column=True, institution_mode=inst_mode)
         if error:
             return None, f"[{slug}] {error}", {}, ""
         table = list(csv.reader(io.StringIO(text)))
@@ -1320,6 +1386,7 @@ def _clean_params(source):
         "suffix_rank": source.get("suffix_rank"),
         "ordinal_case": source.get("ordinal_case"),
         "team_name": source.get("team_name"),
+        "institution": source.get("institution"),
         "tie_style": source.get("tie_style"),
         "award_order": source.get("award_order"),
         "first_plain": source.get("first_plain"),
