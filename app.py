@@ -1,7 +1,7 @@
 """
 Tabbycat Break Exporter v3.10
   * v3.10: optional "institution" column (break + awards; form select "Institution column": off | code | name, JSON key "institution"),
-           blank on intro rows; the tie remark now sits on the INTRO row (full row left blank) when intro rows are on;
+           blank on intro rows; the tie remark appears on BOTH the intro row and the full row when intro rows are on;
            reserve / capped / ineligible / withdrawn ... teams get their own intro row too, only "Different break" teams stay one row
 Tabbycat Break Exporter v3.9
   * v3.9: team names come from long_name first (short_name cut long names off); option team_name = long | short | reference
@@ -1045,14 +1045,12 @@ def export_break_csv(api, category_slug, debate_format, intro_rows=True, suffixe
     intro_count = 0
     for row in rows:
         full = [row.get(h, "") for h in headers]
-        # "intro" row = same break rank (or remark) + numbers + tie remark, but no team / code_name / speakers / institution.
+        # "intro" row = same break rank (or remark) + numbers + tie remark (also kept on the full row), but no team / code_name / speakers / institution.
         # v3.10: every team gets one (also reserve / capped / ineligible / withdrawn ...), except "Different break" teams.
         if intro_rows and not row["_different"]:
             intro = [("" if h in INTRO_BLANK_NO_REMARK else row.get(h, "")) for h in headers]
             writer.writerow(apply_suffixes(headers, intro, suffixes, row["_breaking"]))
-            intro_count += 1
-            if "remark" in headers:                      # the remark is shown on the intro row, the full row keeps it blank
-                full[headers.index("remark")] = ""
+            intro_count += 1                             # the tie remark stays on BOTH the intro row and the full row
         writer.writerow(apply_suffixes(headers, full, suffixes, row["_breaking"]))
 
     metadata = {
