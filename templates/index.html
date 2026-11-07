@@ -217,6 +217,14 @@
             </select>
             <p class="hint">Used in the break and in the awarding export. Teams without a long name fall back to the next one.</p>
 
+            <label for="institution">Institution column</label>
+            <select name="institution" id="institution">
+                <option value="" selected>No &mdash; no institution column</option>
+                <option value="code">Yes &mdash; institution code (as the tab shows it, e.g. ACSL, XU SHS)</option>
+                <option value="name">Yes &mdash; full institution name</option>
+            </select>
+            <p class="hint">Adds an <code>institution</code> column after <code>team</code> in the break and in the awarding export (for the speakers: the institution of their team). It is blank on intro rows and for teams without an institution. Use <code>{{institution}}</code> on the slide.</p>
+
             <label for="ordinal_case">Letters in the rank (1ST / 1st)</label>
             <select name="ordinal_case" id="ordinal_case">
                 <option value="upper" selected>CAPITALS &mdash; 1ST, 2ND, 3RD, 4TH ... 41ST</option>
@@ -289,12 +297,13 @@
   "suffix_average": "average speaks",     //   awards: the average
   "ordinal_case": "upper",                // "upper" (1ST) or "lower" (1st)
   "team_name": "long",                    // "long" (default), "short" or "reference"
+  "institution": "",                      // "" (no column, default), "code" or "name": adds an institution column after team
   "award_tab": "open, novice, schools",   // awards: several tabs in one file
   "award_order": "tab",                   // awards: "tab" (default), "reverse" or "both" (/api/export then also returns csv_reversed)
   "tie_style": "joint",                   // awards: "joint" (JOINT 7TH), "co" (CO-7TH) or "none"
   "first_plain": false                    // awards: 1st place without the number (needs suffix_rank)
 }</pre>
-        <p class="hint"><code>intro_rows</code> is optional (default <code>true</code>); send <code>false</code> for one row each. For <code>"export_type": "awards"</code> the columns are <code>rank, speaker, team, average</code> and <code>category_slug</code> is not needed. In the break file the Break column holds the break rank, or the remark (Capped, Ineligible, Reserve, Withdrawn) of a team that is not breaking.</p>
+        <p class="hint"><code>intro_rows</code> is optional (default <code>true</code>); send <code>false</code> for one row each. For <code>"export_type": "awards"</code> the columns are <code>rank, speaker, team, average</code> and <code>category_slug</code> is not needed. In the break file the Break column holds the break rank, or the remark (Capped, Ineligible, Reserve, Withdrawn) of a team that is not breaking. With intro rows on, every team (also reserve / capped / withdrawn) has an intro row carrying the rank or remark, the numbers and the tie remark; only "Different break" teams stay one row.</p>
     </div>
 
     <script>
