@@ -1567,6 +1567,10 @@ def api_debug():
 from judge_rounds import register_judge_rounds
 register_judge_rounds(app)
 
+# Teams / judges NOT checked in and with MISSING FEEDBACK -> .txt (page /missing)
+from missing_lists import register_missing_lists
+register_missing_lists(app)
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
