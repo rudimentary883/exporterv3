@@ -9,11 +9,16 @@ Two ways to use it (same code):
          from judge_rounds import register_judge_rounds
          register_judge_rounds(app)
 
+v1.1 - second output "all rounds": EVERY judge of the tab (also those with 0 rounds), one row each:
+         name, preliminary_rounds, outrounds, total_rounds, remarks      remarks = "Judged U14QF, U16F" (the outrounds only, round abbreviations)
+     web page: Output = "All judges: preliminary + outrounds + total";  command line: add --all   (-> judges_all_rounds.csv)
+
 Counting rules (change with the options):
   * preliminary rounds = rounds whose stage is "P" (Preliminary)
   * only rounds whose draw is Confirmed or Released are counted (a draft draw is not "judged") - option: include drafts
   * chairs, panellists AND trainees count (any seat in a round) - option: leave trainees out
   * a judge is counted once per round, however many debates they sat in
+  * outrounds (all break categories) = rounds whose stage is "E" (elimination); same draw-status / trainee rules as above
 """
 import argparse
 import csv
@@ -118,6 +123,70 @@ def compute(url, token, slug='', min_rounds=3, include_trainees=True, include_dr
             'judges_seen': len(per_judge)}
 
 
+def compute_all(url, token, slug='', include_trainees=True, include_drafts=False, include_zero=True, session=None):
+    """Every judge: preliminary rounds, outrounds, total and the list of outrounds judged (v1.1)."""
+    sp = urlsplit(url.strip())
+    origin = f"{sp.scheme or 'https'}://{sp.netloc or sp.path.split('/')[0]}"
+    s = session or requests.Session()
+    s.headers['Authorization'] = f'Token {token.strip()}'
+    slug = (slug or guess_slug(url)).strip()
+    tournaments = _list(s, f"{origin}/api/v1/tournaments")
+    slugs = [t.get('slug') for t in tournaments if isinstance(t, dict)]
+    if slug not in slugs:
+        if len(slugs) == 1:
+            slug = slugs[0]
+        else:
+            raise ValueError("Which tournament? Add its slug. Found: " + ', '.join(map(str, slugs)))
+    base = f"{origin}/api/v1/tournaments/{slug}"
+    rounds = sorted(_list(s, base + '/rounds'), key=lambda r: r.get('seq') or 0)
+    is_out = lambda r: (r.get('stage') == 'E') if 'stage' in r else bool(r.get('break_category'))
+    names = {}
+    for a in _list(s, base + '/adjudicators'):
+        names[_norm_url(a.get('url') or a.get('id') or '')] = (a.get('name') or '').strip()
+    prelim_n = {u: 0 for u in names}
+    out_labels = {u: [] for u in names}
+    counted_p, counted_o, skipped = [], [], []
+    for r in rounds:
+        label = r.get('abbreviation') or r.get('name') or str(r.get('seq'))
+        if r.get('draw_status') not in ('C', 'R') and not include_drafts:
+            skipped.append(label)
+            continue
+        (counted_o if is_out(r) else counted_p).append(label)
+        pairing_url = ((r.get('_links') or {}).get('pairing')) or ((r.get('url') or '').rstrip('/') + '/pairings')
+        in_round = set()
+        for debate in _list(s, pairing_url):
+            adj = debate.get('adjudicators') or {}
+            if isinstance(adj, list):
+                urls = adj
+            else:
+                urls = ([adj.get('chair')] + list(adj.get('panellists') or [])
+                        + (list(adj.get('trainees') or []) if include_trainees else []))
+            in_round.update(_norm_url(u) for u in urls if u)
+        for u in in_round:
+            prelim_n.setdefault(u, 0)
+            out_labels.setdefault(u, [])
+            if is_out(r):
+                out_labels[u].append(label)
+            else:
+                prelim_n[u] += 1
+    rows = []
+    for u in prelim_n:
+        p, o = prelim_n[u], len(out_labels[u])
+        if not include_zero and p + o == 0:
+            continue
+        rows.append((names.get(u) or u, p, o, p + o, ('Judged ' + ', '.join(out_labels[u])) if out_labels[u] else ''))
+    rows.sort(key=lambda x: (x[0].casefold(), x[0]))
+    return {'rows': rows, 'counted_prelim': counted_p, 'counted_out': counted_o, 'skipped': skipped, 'slug': slug}
+
+
+def to_csv_all(rows):
+    out = io.StringIO()
+    w = csv.writer(out)
+    w.writerow(['name', 'preliminary_rounds', 'outrounds', 'total_rounds', 'remarks'])
+    w.writerows(rows)
+    return out.getvalue()
+
+
 def to_csv(rows):
     out = io.StringIO()
     w = csv.writer(out)
@@ -140,15 +209,28 @@ button{background:#28a745;color:#fff;border:0;padding:12px 24px;border-radius:6p
 <form method="post"><label>Tab site URL</label><input type="url" name="url" value="{{ f.url }}" placeholder="https://yoursite.calicotab.com">
 <label>Tournament slug (optional)</label><input type="text" name="slug" value="{{ f.slug }}"><p class="hint">Leave blank if the site has only one tournament.</p>
 <label>Admin API token</label><input type="text" name="token" autocomplete="off">
-<label>Minimum rounds</label><input type="number" name="min" value="{{ f.min or 3 }}" min="1">
+<label>Output</label><select name="output" style="width:100%;padding:9px;border:1px solid #ccc;border-radius:6px"><option value="prelim">Only judges with at least N PRELIMINARY rounds (name, number_of_rounds)</option>
+<option value="all" {{ 'selected' if f.output == 'all' else '' }}>All judges: preliminary + outrounds + total + remarks (name, preliminary_rounds, outrounds, total_rounds, remarks)</option></select>
+<label>Minimum rounds (first output only)</label><input type="number" name="min" value="{{ f.min or 3 }}" min="1">
+<label><input type="checkbox" name="zero" {{ 'checked' if f.zero else '' }}> second output: also list judges who judged no round</label>
 <label><input type="checkbox" name="trainees" checked> count trainee seats too</label><label><input type="checkbox" name="drafts"> count draft (unconfirmed) draws too</label>
 <button type="submit">Download .csv</button></form></div></body></html>"""
 
     @app.route('/judge-rounds', methods=['GET', 'POST'])
     def judge_rounds_page():
-        f = {'url': request.form.get('url', ''), 'slug': request.form.get('slug', ''), 'min': request.form.get('min', '3')}
+        f = {'url': request.form.get('url', ''), 'slug': request.form.get('slug', ''), 'min': request.form.get('min', '3'),
+             'output': request.form.get('output', 'prelim'), 'zero': request.method == 'GET' or bool(request.form.get('zero'))}
         if request.method == 'GET':
             return render_template_string(page, f=f, error=None)
+        if f['output'] == 'all':
+            try:
+                res = compute_all(f['url'], request.form.get('token', ''), f['slug'], bool(request.form.get('trainees')),
+                                  bool(request.form.get('drafts')), f['zero'])
+            except Exception as e:
+                return render_template_string(page, f=f, error=str(e))
+            return Response(to_csv_all(res['rows']), mimetype='text/csv', headers={
+                'Content-Disposition': 'attachment; filename=judges_all_rounds.csv',
+                'X-Rounds-Counted': ','.join(res['counted_prelim'] + res['counted_out'])})
         try:
             res = compute(f['url'], request.form.get('token', ''), f['slug'], int(f['min'] or 3),
                           bool(request.form.get('trainees')), bool(request.form.get('drafts')))
@@ -167,7 +249,18 @@ if __name__ == '__main__':
     ap.add_argument('--min', type=int, default=3)
     ap.add_argument('--no-trainees', action='store_true', help='leave trainee seats out of the count')
     ap.add_argument('--drafts', action='store_true')
+    ap.add_argument('--all', action='store_true', help='all judges: preliminary + outrounds + total + remarks')
     a = ap.parse_args()
+    if a.all:
+        try:
+            res = compute_all(a.url, a.token, a.slug, not a.no_trainees, a.drafts)
+        except Exception as e:
+            sys.exit(f"Error: {e}")
+        with open('judges_all_rounds.csv', 'w', encoding='utf-8-sig', newline='') as fh:
+            fh.write(to_csv_all(res['rows']))
+        print(f"{len(res['rows'])} judges -> judges_all_rounds.csv | preliminary: {', '.join(res['counted_prelim'])} | "
+              f"outrounds: {', '.join(res['counted_out']) or 'none'}")
+        sys.exit(0)
     try:
         res = compute(a.url, a.token, a.slug, a.min, not a.no_trainees, a.drafts)
     except Exception as e:
