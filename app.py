@@ -1,4 +1,8 @@
 """
+Tabbycat Break Exporter v3.11
+  * v3.11: judge-rounds page gets an "all judges" output (preliminary + outrounds + total + remarks); new page /awards-full (team awards for every
+           break category + speaker awards for every speaker category); FIX: speaker categories with a hyphen in the slug / name
+           ("16-and-under", "11-and-Under") were not found by the speaker-awards export
 Tabbycat Break Exporter v3.10
   * v3.10: optional "institution" column (break + awards; form select "Institution column": off | code | name, JSON key "institution"),
            blank on intro rows; the tie remark appears on BOTH the intro row and the full row when intro rows are on;
@@ -405,11 +409,15 @@ def rank_group(rows):
 def match_speaker_category(categories, wanted):
     """Exact slug, then exact name, then 'name contains' (same idea as for break categories)."""
     wanted = str(wanted or "").strip().lower()
+    flat = lambda text: re.sub(r"[^a-z0-9]+", "_", str(text or "").lower()).strip("_")     # v3.11: "16-and-under" == "16_and_under"
     for cat in categories:
         if wanted == str(cat.get("slug", "")).lower() or wanted == url_tail(cat.get("url", "")):
             return cat
     for cat in categories:
         if wanted == str(cat.get("name", "")).lower():
+            return cat
+    for cat in categories:
+        if flat(wanted) and flat(wanted) in (flat(cat.get("slug")), flat(cat.get("name"))):
             return cat
     for cat in categories:
         if wanted and wanted in str(cat.get("name", "")).lower():
@@ -1570,6 +1578,10 @@ register_judge_rounds(app)
 # Teams / judges NOT checked in and with MISSING FEEDBACK -> .txt (page /missing)
 from missing_lists import register_missing_lists
 register_missing_lists(app)
+
+# Team awards + speaker awards (every break category / every speaker category) -> .csv (page /awards-full)
+from awards_full import register_awards_full
+register_awards_full(app, TabbycatAPI, _collect_award_rows, pick_team_name, normalize_format)
 
 
 if __name__ == "__main__":
